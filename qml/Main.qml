@@ -1214,6 +1214,9 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
+                        id: envList
+                        KineticScroll { view: envList; step: 72 }
+                        KineticScroll { view: envList; orientation: Qt.Horizontal }
                         model: (details.info.environ || []).filter(kv => !details.envFilter
                             || (kv[0] + "=" + kv[1]).toLowerCase().indexOf(details.envFilter.toLowerCase()) >= 0)
                         ScrollBar.vertical: ScrollBar {}
@@ -1250,6 +1253,9 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
+                        id: filesList
+                        KineticScroll { view: filesList; step: 72 }
+                        KineticScroll { view: filesList; orientation: Qt.Horizontal }
                         model: details.info.files || []
                         ScrollBar.vertical: ScrollBar {}
                         delegate: Row {

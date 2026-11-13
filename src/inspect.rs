@@ -165,5 +165,14 @@ pub fn files(pid: i32) -> Option<Value> {
             json!({"fd": fd, "kind": kind, "target": shown})
         })
         .collect();
+    // Grouped by type (files first), then by target, then fd number.
+    let rank = |k: &str| ["file", "device", "socket", "pipe", "memfd", "anon"].iter().position(|x| *x == k).unwrap_or(9);
+    let mut out = out;
+    out.sort_by(|a, b| {
+        rank(a["kind"].as_str().unwrap_or(""))
+            .cmp(&rank(b["kind"].as_str().unwrap_or("")))
+            .then_with(|| a["target"].as_str().unwrap_or("").cmp(b["target"].as_str().unwrap_or("")))
+            .then_with(|| a["fd"].as_i64().cmp(&b["fd"].as_i64()))
+    });
     Some(json!(out))
 }

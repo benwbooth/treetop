@@ -344,8 +344,7 @@ FocusScope {
             else if (y + rowHeight > list.contentY + list.height) list.contentY = y + rowHeight - list.height
         }
     }
-    readonly property bool userScrolling: list.moving || list.flicking || wheelAnim.running || wheelAnimX.running
-        || flingTimer.running || coast.running
+    readonly property bool userScrolling: list.moving || list.flicking || ksV.active || ksH.active
 
     function applyDiff(d) {
         applyDiffAnchored(d)
@@ -619,138 +618,22 @@ FocusScope {
             readonly property real wheelRows: 6
             readonly property real touchGain: 1.8
 
-            // Smooth scrolling. Mouse wheels glide to an accumulated target
-            // (faster when spun quickly); touchpads track the finger and
-            // keep coasting with momentum when it lifts.
-            property real wheelTarget: 0
-            property real lastWheel: 0
-            property real tpVelocity: 0     // touchpad, px/s (vertical)
-            property real tpVelocityX: 0    // touchpad, px/s (horizontal)
-            property real tpLast: 0
-            property real wheelTargetX: 0
-            NumberAnimation {
-                id: wheelAnim
-                target: list
-                property: "contentY"
-                duration: 110
-                easing.type: Easing.OutCubic
+            // Smooth, kinetic scrolling (both axes; see KineticScroll.qml).
+            KineticScroll {
+                id: ksV
+                view: list
+                step: table.rowHeight * 6
+                sideStep: table.cw * 10
             }
-            NumberAnimation {
-                id: wheelAnimX
-                target: list
-                property: "contentX"
-                duration: 110
-                easing.type: Easing.OutCubic
-            }
-            function clampY(y) { return Math.max(0, Math.min(y, Math.max(0, contentHeight - height))) }
-            function clampX(x) { return Math.max(0, Math.min(x, Math.max(0, contentWidth - width))) }
-            function scrollX(dx) { contentX = clampX(contentX + dx) }
-            // Mouse-wheel style sideways step: glides, accelerates when spun fast.
-            function glideX(dx) {
-                if (!wheelAnimX.running) wheelTargetX = contentX
-                wheelTargetX = clampX(wheelTargetX + dx)
-                wheelAnimX.stop()
-                wheelAnimX.from = contentX
-                wheelAnimX.to = wheelTargetX
-                wheelAnimX.start()
-            }
-            // Qt only gives a WheelHandler events on its own axis (vertical
-            // by default), so sideways swipes need a second, horizontal
-            // handler — without it they never reached this code and got Qt's
-            // momentum-less scrolling instead. Both share handleWheel().
-            function handleWheel(ev) {
-                    const now = Date.now()
-                    // Touchpads: pixel deltas, a touchpad device, or angles that
-                    // aren't whole wheel notches (high-resolution scrolling).
-                    const touch = ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0
-                        || (ev.device && ev.device.type === PointerDevice.TouchPad)
-                        || (ev.angleDelta.x % 120 !== 0) || (ev.angleDelta.y % 120 !== 0)
-                    // Spinning the wheel quickly accelerates (up to ~4x).
-                    const gapMs = now - list.lastWheel
-                    const fast = gapMs < 40 ? 4 : (gapMs < 80 ? 2.8 : (gapMs < 160 ? 1.7 : 1))
-                    if (touch && (ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0 || ev.angleDelta.x !== 0 || ev.angleDelta.y !== 0)) {
-                        // Touchpad: follow the fingers on both axes and remember
-                        // the speed, so lifting them keeps it coasting.
-                        wheelAnim.stop(); wheelAnimX.stop(); coast.stop()
-                        list.cancelFlick()
-                        // Pixel deltas when given; else angles (1/8 degree; ~1px each).
-                        const px = ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0
-                        const dx = -(px ? ev.pixelDelta.x : ev.angleDelta.x / 2) * list.touchGain
-                        const dy = -(px ? ev.pixelDelta.y : ev.angleDelta.y / 2) * list.touchGain
-                        const dt = Math.max(1, now - list.tpLast)
-                        list.tpVelocityX = list.tpVelocityX * 0.6 + (dx / dt * 1000) * 0.4
-                        list.tpVelocity = list.tpVelocity * 0.6 + (dy / dt * 1000) * 0.4
-                        list.tpLast = now
-                        if (dx !== 0) list.contentX = list.clampX(list.contentX + dx)
-                        if (dy !== 0) list.contentY = list.clampY(list.contentY + dy)
-                        flingTimer.restart()
-                    } else if (ev.angleDelta.x !== 0 || ((ev.modifiers & Qt.ShiftModifier) && ev.angleDelta.y !== 0)) {
-                        coast.stop()
-                        // Tilt wheel or Shift+wheel: glide sideways.
-                        const d = ev.angleDelta.x !== 0 ? ev.angleDelta.x : ev.angleDelta.y
-                        list.lastWheel = now
-                        list.glideX(-d / 120 * table.cw * 10 * fast)
-                    } else if (ev.angleDelta.y !== 0) {
-                        coast.stop()
-                        if (!wheelAnim.running) list.wheelTarget = list.contentY
-                        list.lastWheel = now
-                        list.wheelTarget = list.clampY(list.wheelTarget - ev.angleDelta.y / 120 * table.rowHeight * list.wheelRows * fast)
-                        wheelAnim.stop()
-                        wheelAnim.from = list.contentY
-                        wheelAnim.to = list.wheelTarget
-                        wheelAnim.start()
-                    }
-                    ev.accepted = true
-                }
-            WheelHandler {
-                target: null
-                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                onWheel: (ev) => list.handleWheel(ev)
-            }
-            WheelHandler {
-                target: null
+            KineticScroll {
+                id: ksH
+                view: list
                 orientation: Qt.Horizontal
-                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                onWheel: (ev) => list.handleWheel(ev)
+                sideStep: table.cw * 10
             }
-            Timer {
-                // No touchpad events for a moment: the fingers lifted, so coast
-                // (both directions).
-                id: flingTimer
-                interval: 40
-                onTriggered: {
-                    coast.vx = Math.abs(list.tpVelocityX) > 120 ? list.tpVelocityX * 1.2 : 0
-                    coast.vy = Math.abs(list.tpVelocity) > 120 ? list.tpVelocity * 1.2 : 0
-                    if (coast.vx !== 0 || coast.vy !== 0) coast.start()
-                    list.tpVelocity = 0
-                    list.tpVelocityX = 0
-                }
-            }
-            // Kinetic coasting after a touchpad swipe, on both axes, stepped
-            // every frame with exponential decay (Qt's flick() only coasts
-            // reliably along a ListView's own axis).
-            FrameAnimation {
-                id: coast
-                property real vx: 0
-                property real vy: 0
-                onTriggered: {
-                    const dt = Math.min(0.05, frameTime)
-                    const decay = Math.exp(-dt / 0.5)
-                    if (vx !== 0) {
-                        const x = list.clampX(list.contentX + vx * dt)
-                        if (x === list.contentX) vx = 0; else list.contentX = x
-                        vx *= decay
-                        if (Math.abs(vx) < 12) vx = 0
-                    }
-                    if (vy !== 0) {
-                        const y = list.clampY(list.contentY + vy * dt)
-                        if (y === list.contentY) vy = 0; else list.contentY = y
-                        vy *= decay
-                        if (Math.abs(vy) < 12) vy = 0
-                    }
-                    if (vx === 0 && vy === 0) stop()
-                }
-            }
+            function clampY(y) { return ksV.clampY(y) }
+            function clampX(x) { return ksV.clampX(x) }
+            function glideX(dx) { ksV.glideX(dx) }
 
             delegate: Rectangle {
                 id: rowItem
