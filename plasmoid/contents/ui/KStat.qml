@@ -18,12 +18,31 @@ RowLayout {
     property real h: 22
     // Draw the value on top of the graph (compact) instead of beside it.
     property bool overlay: true
+    // Write the label sideways (bottom to top), so a full name takes the
+    // width of one small letter.
+    property bool verticalLabel: false
     readonly property bool inside: overlay && (showGraph || bar)
 
     spacing: Math.round(h * 0.06)
 
+    Item {
+        visible: stat.verticalLabel && stat.label.length > 0
+        Layout.alignment: Qt.AlignVCenter
+        implicitWidth: vlabel.implicitHeight
+        implicitHeight: Math.min(stat.h, vlabel.implicitWidth)
+        Text {
+            id: vlabel
+            anchors.centerIn: parent
+            rotation: -90
+            text: stat.label
+            color: stat.colorLabel ? stat.color : Kirigami.Theme.textColor
+            font.pixelSize: Math.max(6, Math.round(stat.h * 0.2))
+            font.bold: true
+            renderType: Text.NativeRendering
+        }
+    }
     Text {
-        visible: stat.label.length > 0
+        visible: !stat.verticalLabel && stat.label.length > 0
         text: stat.label
         color: stat.colorLabel ? stat.color : Kirigami.Theme.textColor
         font.pixelSize: Math.max(7, Math.round(stat.h * 0.22))
@@ -47,20 +66,25 @@ RowLayout {
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.margins: 1
             height: Math.max(0, Math.min(1, stat.fill)) * (parent.height - 2)
-            color: stat.color
+            color: Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.7)
         }
+        // The value sits small and see-through in the top corner, so the
+        // graph underneath stays visible.
         Text {
             id: valueInside
             visible: stat.inside
             z: 2
-            anchors.centerIn: parent
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.topMargin: -1
+            anchors.rightMargin: 2
             text: stat.value
             color: Kirigami.Theme.textColor
-            font.pixelSize: Math.round(stat.h * 0.36)
-            font.bold: true
+            opacity: 0.8
+            font.pixelSize: Math.round(stat.h * 0.3)
             font.family: "monospace"
             style: Text.Outline
-            styleColor: Qt.rgba(Kirigami.Theme.backgroundColor.r, Kirigami.Theme.backgroundColor.g, Kirigami.Theme.backgroundColor.b, 0.85)
+            styleColor: Qt.rgba(Kirigami.Theme.backgroundColor.r, Kirigami.Theme.backgroundColor.g, Kirigami.Theme.backgroundColor.b, 0.35)
             renderType: Text.NativeRendering
         }
         Canvas {
@@ -80,15 +104,15 @@ RowLayout {
                 for (let i = 0; i < n; i++) ctx.lineTo(i / (n - 1) * w, hh - Math.min(1, Math.max(0, v[i])) * hh)
                 ctx.lineTo(w, hh)
                 ctx.closePath()
-                ctx.fillStyle = Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.45)
+                ctx.fillStyle = Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.6)
                 ctx.fill()
                 ctx.beginPath()
                 for (let i = 0; i < n; i++) {
                     const y = hh - Math.min(1, Math.max(0, v[i])) * hh
                     if (i === 0) ctx.moveTo(0, y); else ctx.lineTo(i / (n - 1) * w, y)
                 }
-                ctx.strokeStyle = stat.color
-                ctx.lineWidth = 1
+                ctx.strokeStyle = Qt.lighter(stat.color, 1.25)
+                ctx.lineWidth = 1.5
                 ctx.stroke()
             }
         }

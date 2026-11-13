@@ -17,8 +17,8 @@
     <entry name="showGraphs" type="Bool"><default>true</default></entry>
     <entry name="colorLabels" type="Bool"><default>true</default></entry>
     <entry name="valuesInside" type="Bool"><default>true</default></entry>
-    <!-- "full" (CPU), "short" (C) or "none" -->
-    <entry name="labels" type="String"><default>short</default></entry>
+    <!-- "vertical" (CPU written sideways), "short" (C), "full" or "none" -->
+    <entry name="labels" type="String"><default>vertical</default></entry>
     <entry name="graphWidth" type="Int"><default>90</default></entry>
     <entry name="updateInterval" type="Int"><default>1000</default></entry>
   </group>

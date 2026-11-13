@@ -106,7 +106,8 @@ PlasmoidItem {
     }
     function pct(v) { return (Number(v) || 0).toFixed(0) + "%" }
     // Label for an item per the "labels" setting: full name, one letter, or none.
-    function lbl(full, letter) { return cfg.labels === "full" ? full : (cfg.labels === "none" ? "" : letter) }
+    function lbl(full, letter) { return (cfg.labels === "full" || cfg.labels === "vertical") ? full : (cfg.labels === "none" ? "" : letter) }
+    readonly property bool vlabels: cfg.labels === "vertical"
 
     // ---- open treetop ----------------------------------------------------
     P5Support.DataSource {
@@ -226,14 +227,14 @@ PlasmoidItem {
                 h: compact.h; label: root.lbl("CPU", "C"); color: "#43c96b"
                 value: (Number(cpu.value) || 0).toFixed(0) + "%"
                 history: root.hCpu
-                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside
+                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
             }
             KStat {
                 visible: root.cfg.showMemory
                 h: compact.h; label: root.lbl("MEM", "M"); color: "#4fb3d9"
                 value: (Number(mem.value) || 0).toFixed(0) + "%"
                 history: root.hMem
-                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside
+                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
             }
             Repeater {
                 model: root.gpuIndexes
@@ -248,7 +249,7 @@ PlasmoidItem {
                         color: "#c06fd8"
                         value: parent.g ? (Number(parent.g.usage.value) || 0).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.hist : []
-                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside
+                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
                     }
                     // GPU memory: history of VRAM use, amount used inside.
                     KStat {
@@ -256,9 +257,9 @@ PlasmoidItem {
                         h: compact.h
                         label: root.lbl("VRAM", "V") + parent.n
                         color: "#d070a8"
-                        value: parent.g ? root.fmtRate(parent.g.usedVram.value) : "–"
+                        value: parent.g ? ((Number(parent.g.usedVram.value) || 0) / Math.max(1, Number(parent.g.vramTotal.value) || 0) * 100).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.vhist : []
-                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside
+                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
                     }
                 }
             }
@@ -270,19 +271,27 @@ PlasmoidItem {
                 bar: !io
                 fill: (Number(diskUse.value) || 0) / 100
                 history: root.hDisk
-                showGraph: io && root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside
+                showGraph: io && root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
             }
             // Network: arrows and two stacked rates, like KStats.
             RowLayout {
                 visible: root.cfg.showNetwork
                 spacing: Math.round(compact.h * 0.08)
-                Text {
-                    visible: text.length > 0
-                    text: root.lbl("NET", "N")
-                    color: root.cfg.colorLabels ? "#b07fe0" : Kirigami.Theme.textColor
-                    font.pixelSize: Math.max(7, Math.round(compact.h * 0.22))
-                    font.bold: true
-                    renderType: Text.NativeRendering
+                Item {
+                    visible: root.lbl("NET", "N").length > 0
+                    Layout.alignment: Qt.AlignVCenter
+                    implicitWidth: root.vlabels ? netLabel.implicitHeight : netLabel.implicitWidth
+                    implicitHeight: root.vlabels ? netLabel.implicitWidth : netLabel.implicitHeight
+                    Text {
+                        id: netLabel
+                        anchors.centerIn: parent
+                        rotation: root.vlabels ? -90 : 0
+                        text: root.lbl("NET", "N")
+                        color: root.cfg.colorLabels ? "#b07fe0" : Kirigami.Theme.textColor
+                        font.pixelSize: root.vlabels ? Math.max(6, Math.round(compact.h * 0.2)) : Math.max(7, Math.round(compact.h * 0.22))
+                        font.bold: true
+                        renderType: Text.NativeRendering
+                    }
                 }
                 Column {
                     spacing: -2

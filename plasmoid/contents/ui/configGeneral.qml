@@ -19,7 +19,7 @@ KCM.SimpleKCM {
     property alias cfg_colorLabels: colorLabels.checked
     property alias cfg_valuesInside: valuesInside.checked
     property bool cfg_valuesInsideDefault
-    property string cfg_labels: "short"
+    property string cfg_labels: "vertical"
     property string cfg_labelsDefault
     property alias cfg_graphWidth: graphWidth.value
     property alias cfg_updateInterval: interval.value
@@ -76,9 +76,10 @@ KCM.SimpleKCM {
         QQC2.CheckBox { id: valuesInside; text: i18n("Values inside the graphs (compact)") }
         QQC2.ComboBox {
             Kirigami.FormData.label: i18n("Labels:")
-            model: [i18n("One letter (C, M, G…)"), i18n("Full (CPU, MEM…)"), i18n("None (colours only)")]
-            currentIndex: cfg_labels === "full" ? 1 : (cfg_labels === "none" ? 2 : 0)
-            onActivated: cfg_labels = ["short", "full", "none"][currentIndex]
+            model: [i18n("Sideways (CPU written vertically)"), i18n("One letter (C, M, G…)"), i18n("Full (CPU, MEM…)"), i18n("None (colours only)")]
+            readonly property var keys: ["vertical", "short", "full", "none"]
+            currentIndex: Math.max(0, keys.indexOf(cfg_labels))
+            onActivated: cfg_labels = keys[currentIndex]
         }
         RowLayout {
             Kirigami.FormData.label: i18n("Graph width:")
