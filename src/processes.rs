@@ -122,6 +122,40 @@ pub struct Processes {
     prev_rank: RefCell<HashMap<i32, usize>>,
 }
 
+/// A readable program name: the kernel's `comm` is cut to 15 characters
+/// ("metroid_gb_worl"), so use the command line's program (Nix wrappers'
+/// ".foo-wrapped" -> "foo"), or for interpreters the script they run.
+pub fn display_name(p: &Proc) -> String {
+    let clean = |t: &str| -> String {
+        let base = t.rsplit('/').next().unwrap_or(t);
+        let base = base.strip_prefix('.').unwrap_or(base);
+        base.strip_suffix("-wrapped").unwrap_or(base).to_string()
+    };
+    let mut args = p.cmd.split_whitespace();
+    let Some(first) = args.next() else { return p.name.clone() };
+    if first.starts_with('[') {
+        return p.name.clone(); // kernel thread
+    }
+    let prog = clean(first);
+    let interpreter = matches!(
+        prog.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.'),
+        "python" | "node" | "bash" | "sh" | "zsh" | "perl" | "ruby" | "java" | "deno" | "bun" | "lua" | "php"
+    );
+    if interpreter {
+        // First non-option argument: the script (skip "-m module" style too).
+        let mut it = args.peekable();
+        while let Some(a) = it.next() {
+            if a == "-m" || a == "-c" {
+                return it.next().map(|m| format!("{prog} {m}")).unwrap_or(prog);
+            }
+            if !a.starts_with('-') {
+                return clean(a);
+            }
+        }
+    }
+    if prog.is_empty() { p.name.clone() } else { prog }
+}
+
 /// The container a containerd shim process runs, from its "-id <id>".
 fn shim_container(p: &Proc) -> Option<String> {
     if !p.name.starts_with("containerd-shim") {
@@ -893,7 +927,7 @@ impl Processes {
                     measure(p, kind)
                 };
                 if v > 0.0 {
-                    let e = by_name.entry(p.name.clone()).or_insert((0.0, 0));
+                    let e = by_name.entry(display_name(p)).or_insert((0.0, 0));
                     e.0 += v;
                     e.1 += 1;
                 }
@@ -935,6 +969,16 @@ impl Processes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readable_names() {
+        let mk = |name: &str, cmd: &str| Proc { name: name.into(), cmd: cmd.into(), ..Default::default() };
+        assert_eq!(display_name(&mk("metroid_gb_worl", "/home/b/target/release/metroid_gb_world --x")), "metroid_gb_world");
+        assert_eq!(display_name(&mk(".plasmashell-wr", "/nix/store/abc-plasma/bin/.plasmashell-wrapped")), "plasmashell");
+        assert_eq!(display_name(&mk("python3", "/nix/store/x/bin/python3 -u /srv/whisperlive_server.py --port 9090")), "whisperlive_server.py");
+        assert_eq!(display_name(&mk("python3", "python3 -m http.server")), "python3 http.server");
+        assert_eq!(display_name(&mk("kworker/0:1", "[kworker/0:1]")), "kworker/0:1");
+    }
 
     #[test]
     fn shim_names_its_container() {

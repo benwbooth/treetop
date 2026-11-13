@@ -198,9 +198,31 @@ PlasmoidItem {
         if (kind === "mem" || kind === "vram") return fmtRate(v)
         return fmtRate(v) + "/s"
     }
-    readonly property var kindTitle: ({ cpu: "CPU", mem: "Memory", gpu: "GPU", vram: "VRAM", disk: "Disk I/O", net: "Network" })
+    readonly property var kindTitle: ({ cpu: "CPU", mem: "Memory", gpu: "GPU", vram: "VRAM", disk: "Disk I/O", net: "Network", temp: "Temperatures & fans" })
     readonly property var kindColor: ({ cpu: palette.cpu, mem: palette.mem, gpu: palette.gpu, vram: palette.vram, disk: palette.disk, net: palette.net })
+    // Every temperature and fan, grouped by device (from the treetop app).
+    function sensorsText() {
+        const list = topData && topData.sensors ? topData.sensors : null
+        if (!list || !list.length) {
+            let t = "<table cellspacing='1'>"
+            if (cpuTempC > 0) t += "<tr><td><b>CPU</b></td><td align='right'>&nbsp;&nbsp;" + c(tempColor(cpuTempC), "<b>" + cpuTempC.toFixed(0) + "°C</b>") + "</td></tr>"
+            if (gpuTempC > 0) t += "<tr><td><b>GPU</b></td><td align='right'>&nbsp;&nbsp;" + c(tempColor(gpuTempC), "<b>" + gpuTempC.toFixed(0) + "°C</b>") + "</td></tr>"
+            return t + "</table><br>" + c(Kirigami.Theme.disabledTextColor, "Open treetop for every sensor and fan.")
+        }
+        let t = "<table cellspacing='1'>"
+        let last = ""
+        for (const x of list) {
+            const v = x.kind === "fan"
+                ? c(palette.net, "<b>" + x.value.toFixed(0) + " rpm</b>")
+                : c(tempColor(x.value), "<b>" + x.value.toFixed(0) + "°C</b>")
+            t += "<tr><td>" + (x.dev !== last ? "<b>" + esc(x.dev) + "</b>" : "") + "</td><td>&nbsp;&nbsp;"
+                + c(Kirigami.Theme.disabledTextColor, esc(x.label)) + "</td><td align='right'>&nbsp;&nbsp;" + v + "</td></tr>"
+            last = x.dev
+        }
+        return t + "</table>"
+    }
     function topText(kind) {
+        if (kind === "temp") return sensorsText()
         if (!topData || !topData[kind]) return c(Kirigami.Theme.disabledTextColor, "Open treetop to see which programs are using this.")
         const list = topData[kind]
         if (!list.length) return c(Kirigami.Theme.disabledTextColor, "Nothing is using it right now.")
@@ -217,6 +239,32 @@ PlasmoidItem {
     toolTipMainText: hoverKind ? kindTitle[hoverKind] + " — top programs" : "treetop"
     toolTipTextFormat: Text.RichText
     toolTipSubText: hoverKind ? topText(hoverKind) : summaryText
+    // Our own tooltip content: Plasma's default one caps the number of
+    // lines and clipped the lists; this sizes to whatever it shows.
+    toolTipItem: Item {
+        implicitWidth: tipCol.implicitWidth + Kirigami.Units.largeSpacing * 2
+        implicitHeight: tipCol.implicitHeight + Kirigami.Units.largeSpacing * 2
+        Layout.minimumWidth: implicitWidth
+        Layout.minimumHeight: implicitHeight
+        Layout.maximumWidth: implicitWidth
+        Layout.maximumHeight: implicitHeight
+        ColumnLayout {
+            id: tipCol
+            anchors.centerIn: parent
+            spacing: Kirigami.Units.smallSpacing
+            Kirigami.Heading {
+                level: 4
+                text: root.toolTipMainText
+            }
+            Text {
+                textFormat: Text.RichText
+                text: root.toolTipSubText
+                color: Kirigami.Theme.textColor
+                font.family: "monospace"
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize * 0.95
+            }
+        }
+    }
     // Short GPU name: "Navi 31 [Radeon RX 7900 XT/...] (TUF Gaming Radeon RX
     // 7900 XTX OC)" -> "Radeon RX 7900 XTX"; "Raphael [Radeon 610M]" -> "Radeon 610M".
     function shortGpuName(n) {
@@ -444,7 +492,7 @@ PlasmoidItem {
             RowLayout {
                 visible: root.cfg.showTemps && (root.cpuTempC > 0 || root.gpuTempC > 0)
                 spacing: Math.round(compact.h * 0.08)
-                HoverHandler { onHoveredChanged: root.setHover("", hovered) }
+                HoverHandler { onHoveredChanged: root.setHover("temp", hovered) }
                 Item {
                     visible: root.lbl("TEMP", "T").length > 0
                     Layout.alignment: Qt.AlignVCenter

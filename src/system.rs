@@ -481,6 +481,7 @@ impl System {
             "net": {"rx": rx_total, "tx": tx_total, "interfaces": ifaces},
             "load": load,
             "uptime": uptime,
+            "sensors": sensors(&self.amd.iter().map(|c| c.pdev.clone()).collect::<Vec<_>>()),
         });
     }
 }
@@ -489,6 +490,74 @@ impl Clone for Gpu {
     fn clone(&self) -> Self {
         Gpu { name: self.name.clone(), pdev: self.pdev.clone(), link: self.link.clone(), perf_level: self.perf_level.clone(), ..*self }
     }
+}
+
+/// Every hwmon temperature and fan, with a friendly device name:
+/// [{dev, label, kind: "temp"|"fan", value}] (°C or rpm).
+fn sensors(gpu_order: &[String]) -> Vec<Value> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir("/sys/class/hwmon") else { return out };
+    let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    dirs.sort();
+    let (mut ram, mut nvme_n) = (0, 0);
+    for h in dirs {
+        let chip = read(h.join("name")).map(|s| s.trim().to_string()).unwrap_or_default();
+        let dev = match chip.as_str() {
+            "k10temp" | "coretemp" | "zenpower" | "cpu_thermal" => "CPU".to_string(),
+            "amdgpu" | "nouveau" | "radeon" => {
+                let pci = fs::canonicalize(h.join("device")).ok()
+                    .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()))
+                    .unwrap_or_default();
+                match gpu_order.iter().position(|g| *g == pci) {
+                    Some(i) => format!("GPU{}", i + 1),
+                    None => "GPU".to_string(),
+                }
+            }
+            "nvme" => {
+                nvme_n += 1;
+                read(h.join("device/model")).map(|m| m.trim().to_string()).filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| format!("NVMe {nvme_n}"))
+            }
+            "spd5118" | "jc42" => {
+                ram += 1;
+                format!("RAM {ram}")
+            }
+            c if c.starts_with("iwlwifi") || c.starts_with("mt7") || c.starts_with("ath") => "Wi-Fi".to_string(),
+            c if c.starts_with("steam") => "Steam controller".to_string(),
+            c => c.to_string(),
+        };
+        let Ok(files) = fs::read_dir(&h) else { continue };
+        let mut names: Vec<String> = files.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        names.sort_by_key(|n| (n.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().unwrap_or(0), n.clone()));
+        for n in names {
+            let (kind, base) = if let Some(b) = n.strip_suffix("_input").filter(|b| b.starts_with("temp")) {
+                ("temp", b.to_string())
+            } else if let Some(b) = n.strip_suffix("_input").filter(|b| b.starts_with("fan")) {
+                ("fan", b.to_string())
+            } else {
+                continue;
+            };
+            let Some(raw) = read_u64(h.join(&n)) else { continue };
+            let label = read(h.join(format!("{base}_label"))).map(|l| l.trim().to_string()).unwrap_or(base.clone());
+            // Generic "temp1"/"fan1" say nothing beyond the kind.
+            let label = if label.trim_start_matches(kind).chars().all(|c| c.is_ascii_digit()) { kind.to_string() } else { label };
+            let value = if kind == "temp" { raw as f64 / 1000.0 } else { raw as f64 };
+            if kind == "temp" && (value <= 0.0 || value > 200.0) {
+                continue;
+            }
+            out.push(json!({"dev": dev, "label": label, "kind": kind, "value": value}));
+        }
+    }
+    // CPU, GPUs, RAM, drives, Wi-Fi, then anything else (stable within).
+    let rank = |d: &str| {
+        if d == "CPU" { 0 } else if d.starts_with("GPU") { 1 } else if d.starts_with("RAM") { 2 }
+        else if d.contains("SSD") || d.starts_with("NVMe") || d.contains("GP-") { 3 } else if d == "Wi-Fi" { 4 } else { 5 }
+    };
+    out.sort_by(|a, b| {
+        let (da, db) = (a["dev"].as_str().unwrap_or(""), b["dev"].as_str().unwrap_or(""));
+        rank(da).cmp(&rank(db)).then(da.cmp(db))
+    });
+    out
 }
 
 fn cpu_temperature() -> Option<f64> {

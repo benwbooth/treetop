@@ -83,10 +83,12 @@ ApplicationWindow {
             case "gpu": return snap.gpus.length === 0 ? 0 : 1 + (sectionOpen("gpu") ? 3 * gpus.length : 0)
             case "storage": return 1 + (sectionOpen("storage") ? fsCount : 0)
             case "system": return 1 + (sectionOpen("system") ? 3 : 0)
+            case "sensors": return (snap.sensors || []).length ? 1 + (sectionOpen("sensors") ? sensorGroups.length : 0) : 0
             }
             return 1
         }
-        const names = ["cpu", "mem", "gpu", "storage", "system"].filter(n => n !== "gpu" || snap.gpus.length > 0)
+        const names = ["cpu", "mem", "gpu", "storage", "system", "sensors"]
+            .filter(n => (n !== "gpu" || snap.gpus.length > 0) && (n !== "sensors" || (snap.sensors || []).length > 0))
         let best = null
         for (let cols = 1; cols <= Math.min(5, names.length); cols++) {
             const colW = (w - meterArea.gap * (cols - 1)) / cols
@@ -120,6 +122,16 @@ ApplicationWindow {
         function onCollapsedSectionsChanged() { Qt.callLater(win.updatePlan) }
     }
     readonly property var focusInfo: snap.procs && snap.procs.focus ? snap.procs.focus : null
+    // Temperatures and fans grouped by device: [{dev, items: [...]}].
+    readonly property var sensorGroups: {
+        const g = []
+        for (const x of (snap.sensors || [])) {
+            if (!g.length || g[g.length - 1].dev !== x.dev) g.push({ dev: x.dev, items: [] })
+            g[g.length - 1].items.push(x)
+        }
+        return g
+    }
+    function tempColor(t) { return t >= 80 ? cRed : (t >= 60 ? cYellow : cGreen) }
     function setGpuShown(pdev, show) {
         if (show) {
             settings.hiddenGpus = hiddenGpus.filter(p => p !== pdev).join(",")
@@ -290,7 +302,7 @@ ApplicationWindow {
     function hideWindow() { win.hide() }
     // For the D-Bus Top() call (panel widget tooltips).
     property var top: ({})
-    function topJson() { return JSON.stringify(top) }
+    function topJson() { return JSON.stringify(Object.assign({ sensors: snap.sensors || [] }, top)) }
     // Open (and not minimized) -> hide; otherwise show. Not "focused": a
     // click on the panel widget or tray takes focus away first.
     function toggleWindow() {
@@ -685,7 +697,7 @@ ApplicationWindow {
                             model: parent.names.length
                             Loader {
                                 width: meterArea.plan.colW
-                                sourceComponent: ({ cpu: cpuSection, mem: memSection, gpu: gpuSection, storage: storageSection, system: systemSection })[parent.names[index]]
+                                sourceComponent: ({ cpu: cpuSection, mem: memSection, gpu: gpuSection, storage: storageSection, system: systemSection, sensors: sensorsSection })[parent.names[index]]
                             }
                         }
                     }
@@ -877,6 +889,39 @@ ApplicationWindow {
                         ToolTip.visible: fsHover.hovered
                         ToolTip.delay: 500
                         HoverHandler { id: fsHover }
+                    }
+                }
+            }
+        }
+
+        Component {
+            id: sensorsSection
+            ColumnLayout {
+                spacing: 1
+                SectionHeader {
+                    Layout.fillWidth: true
+                    title: "Sensors"
+                    open: win.sectionOpen("sensors")
+                    readonly property var temps: (win.snap.sensors || []).filter(x => x.kind === "temp").map(x => x.value)
+                    readonly property var fans: (win.snap.sensors || []).filter(x => x.kind === "fan")
+                    summary: (temps.length ? "hottest " + Math.max(...temps).toFixed(0) + "°C" : "")
+                        + (fans.length ? " · " + fans.length + (fans.length === 1 ? " fan " : " fans ") + fans.map(f => f.value.toFixed(0)).join("/") + " rpm" : "")
+                    onToggled: win.toggleSection("sensors")
+                }
+                Repeater {
+                    model: win.sectionOpen("sensors") ? win.sensorGroups.length : 0
+                    Text {
+                        readonly property var grp: win.sensorGroups[index] || ({ dev: "", items: [] })
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        font: win.mono
+                        color: win.textColor
+                        textFormat: Text.StyledText
+                        text: "<font color='" + win.cCyan + "'>" + grp.dev + "</font> "
+                            + grp.items.map(x => "<font color='" + win.dimColor + "'>" + x.label + "</font> "
+                                + (x.kind === "fan"
+                                    ? "<font color='" + win.cBlue + "'><b>" + x.value.toFixed(0) + "rpm</b></font>"
+                                    : "<font color='" + win.tempColor(x.value) + "'><b>" + x.value.toFixed(0) + "°</b></font>")).join("  ")
                     }
                 }
             }
