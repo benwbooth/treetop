@@ -519,19 +519,17 @@ FocusScope {
                 wheelAnimX.to = wheelTargetX
                 wheelAnimX.start()
             }
-            WheelHandler {
-                target: null
-                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                onWheel: (ev) => {
+            // Qt only gives a WheelHandler events on its own axis (vertical
+            // by default), so sideways swipes need a second, horizontal
+            // handler — without it they never reached this code and got Qt's
+            // momentum-less scrolling instead. Both share handleWheel().
+            function handleWheel(ev) {
                     const now = Date.now()
                     // Touchpads: pixel deltas, a touchpad device, or angles that
                     // aren't whole wheel notches (high-resolution scrolling).
                     const touch = ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0
                         || (ev.device && ev.device.type === PointerDevice.TouchPad)
                         || (ev.angleDelta.x % 120 !== 0) || (ev.angleDelta.y % 120 !== 0)
-                    if (now - list.tpLast > 400 && now - list.lastWheel > 400)
-                        console.log("treetop scroll start: device", ev.device ? ev.device.type : "?", "pixel", ev.pixelDelta.x, ev.pixelDelta.y,
-                                    "angle", ev.angleDelta.x, ev.angleDelta.y, "phase", ev.phase, "touch", touch)
                     // Spinning the wheel quickly accelerates (up to ~4x).
                     const gapMs = now - list.lastWheel
                     const fast = gapMs < 40 ? 4 : (gapMs < 80 ? 2.8 : (gapMs < 160 ? 1.7 : 1))
@@ -569,6 +567,16 @@ FocusScope {
                     }
                     ev.accepted = true
                 }
+            WheelHandler {
+                target: null
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: (ev) => list.handleWheel(ev)
+            }
+            WheelHandler {
+                target: null
+                orientation: Qt.Horizontal
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: (ev) => list.handleWheel(ev)
             }
             Timer {
                 // No touchpad events for a moment: the fingers lifted, so coast
@@ -592,7 +600,7 @@ FocusScope {
                 property real vy: 0
                 onTriggered: {
                     const dt = Math.min(0.05, frameTime)
-                    const decay = Math.exp(-dt / 0.45)
+                    const decay = Math.exp(-dt / 0.5)
                     if (vx !== 0) {
                         const x = list.clampX(list.contentX + vx * dt)
                         if (x === list.contentX) vx = 0; else list.contentX = x
