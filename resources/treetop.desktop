@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=treetop
+GenericName=System Monitor
+Comment=htop-style process tree with CPU, memory, GPU, disk, network and container monitoring
+Exec=treetop
+Icon=treetop
+Categories=System;Monitor;Qt;KDE;
+Keywords=htop;top;process;task;manager;gpu;docker;container;monitor;
+StartupNotify=false

@@ -1,0 +1,27 @@
+[package]
+name = "treetop"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "An htop-style system monitor for KDE Plasma: process tree, GPU, containers, tray icon and panel widget"
+
+[dependencies]
+cxx = "1"
+cxx-qt = "0.10"
+cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+libc = "0.2"
+serde_json = "1"
+
+[build-dependencies]
+cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
+
+[profile.release]
+lto = "thin"
+
+# Dev builds: our code lightly optimized, dependencies fully, so reading
+# /proc and building rows is fast even while iterating.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

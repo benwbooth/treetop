@@ -1,0 +1,16 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [{ "Name": "Ben Booth" }],
+        "Category": "System Information",
+        "Description": "Live CPU, memory, GPU, disk and network graphs for the panel; click to open treetop.",
+        "EnabledByDefault": true,
+        "Icon": "utilities-system-monitor",
+        "Id": "com.benwbooth.treetop",
+        "License": "MIT",
+        "Name": "treetop",
+        "Version": "0.1.0",
+        "Website": "https://github.com/benwbooth/treetop"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
