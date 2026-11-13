@@ -6,10 +6,16 @@
   <group name="General">
     <entry name="showCpu" type="Bool"><default>true</default></entry>
     <entry name="showMemory" type="Bool"><default>true</default></entry>
-    <entry name="showDisk" type="Bool"><default>true</default></entry>
-    <entry name="showNetwork" type="Bool"><default>true</default></entry>
+    <entry name="showGpu" type="Bool"><default>true</default></entry>
     <entry name="hiddenGpus" type="StringList"><default></default></entry>
+    <entry name="showDisk" type="Bool"><default>true</default></entry>
+    <!-- "usage": space used on diskSensor; "io": read+write rate -->
+    <entry name="diskMode" type="String"><default>usage</default></entry>
+    <entry name="diskSensor" type="String"><default>disk/all/usedPercent</default></entry>
+    <entry name="showNetwork" type="Bool"><default>true</default></entry>
     <entry name="showGraphs" type="Bool"><default>true</default></entry>
+    <entry name="colorLabels" type="Bool"><default>true</default></entry>
+    <entry name="graphWidth" type="Int"><default>100</default></entry>
     <entry name="updateInterval" type="Int"><default>1000</default></entry>
   </group>
 </kcfg>

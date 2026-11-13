@@ -6,61 +6,60 @@ import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.plasmoid
 import org.kde.plasma.plasma5support as P5Support
 
-// treetop's panel widget: kstats-style live mini graphs from KDE's sensor
-// daemon. Clicking toggles the treetop window (treetop --toggle).
+// treetop's panel widget, KStats-style: CPU, memory, each GPU, disk and
+// network with small history graphs, from KDE's sensor daemon. Clicking
+// toggles the treetop window. In the system tray it draws four tiny bars.
 PlasmoidItem {
     id: root
-    readonly property int rate: Math.max(250, Plasmoid.configuration.updateInterval)
+    readonly property var cfg: Plasmoid.configuration
+    readonly property int updateRate: Math.max(250, cfg.updateInterval)
     readonly property int historyLength: 30
     preferredRepresentation: compactRepresentation
     Plasmoid.title: "treetop"
     Plasmoid.icon: "utilities-system-monitor"
 
     // ---- sensors ---------------------------------------------------------
-    Sensors.Sensor { id: cpu; sensorId: "cpu/all/usage"; updateRateLimit: root.rate }
-    Sensors.Sensor { id: cpuTemp; sensorId: "cpu/all/averageTemperature"; updateRateLimit: root.rate }
-    Sensors.Sensor { id: mem; sensorId: "memory/physical/usedPercent"; updateRateLimit: root.rate }
-    Sensors.Sensor { id: memUsed; sensorId: "memory/physical/used"; updateRateLimit: root.rate }
+    Sensors.Sensor { id: cpu; sensorId: "cpu/all/usage"; updateRateLimit: root.updateRate }
+    Sensors.Sensor { id: cpuTemp; sensorId: "cpu/all/averageTemperature"; updateRateLimit: root.updateRate }
+    Sensors.Sensor { id: mem; sensorId: "memory/physical/usedPercent"; updateRateLimit: root.updateRate }
+    Sensors.Sensor { id: memUsed; sensorId: "memory/physical/used"; updateRateLimit: root.updateRate }
     Sensors.Sensor { id: memTotal; sensorId: "memory/physical/total" }
-    Sensors.Sensor { id: diskR; sensorId: "disk/all/read"; updateRateLimit: root.rate }
-    Sensors.Sensor { id: diskW; sensorId: "disk/all/write"; updateRateLimit: root.rate }
-    Sensors.Sensor { id: netDown; sensorId: "network/all/download"; updateRateLimit: root.rate }
-    Sensors.Sensor { id: netUp; sensorId: "network/all/upload"; updateRateLimit: root.rate }
+    Sensors.Sensor { id: diskUse; sensorId: root.cfg.diskSensor || "disk/all/usedPercent"; updateRateLimit: 5000 }
+    Sensors.Sensor { id: diskR; sensorId: "disk/all/read"; updateRateLimit: root.updateRate }
+    Sensors.Sensor { id: diskW; sensorId: "disk/all/write"; updateRateLimit: root.updateRate }
+    Sensors.Sensor { id: netDown; sensorId: "network/all/download"; updateRateLimit: root.updateRate }
+    Sensors.Sensor { id: netUp; sensorId: "network/all/upload"; updateRateLimit: root.updateRate }
 
-    // GPUs: ksystemstats numbers them gpu0, gpu1, ...
-    Sensors.SensorTreeModel { id: tree }
-    property int gpuCount: 0
-    Timer {
-        // Count GPUs once the sensor tree has loaded.
-        interval: 1500; running: true; repeat: false
-        onTriggered: {
-            let n = 0
-            while (n < 8) {
-                const probe = Qt.createQmlObject('import org.kde.ksysguard.sensors as S; S.Sensor { sensorId: "gpu/gpu' + n + '/usage" }', root)
-                const ok = probe.name && probe.name.length > 0
-                probe.destroy()
-                if (!ok) break
-                n++
-            }
-            root.gpuCount = n
-        }
-    }
-    readonly property var gpuIndexes: {
+    // GPUs: ksystemstats numbers them gpu0, gpu1, ... Sensors load
+    // asynchronously, so a slot counts once its name sensor has a value.
+    readonly property int maxGpus: 4
+    // Sensor slots of the GPUs present, ordered like the treetop app
+    // (most VRAM first), so "GPU1" means the same card everywhere.
+    readonly property var gpuPresent: {
+        tick
         const out = []
-        for (let i = 0; i < gpuCount; i++)
-            if (Plasmoid.configuration.hiddenGpus.indexOf(String(i)) < 0) out.push(i)
-        return out
+        for (let i = 0; i < maxGpus; i++) {
+            const g = gpuSensors.objectAt(i)
+            if (g && g.name.value !== undefined && String(g.name.value).length > 0) out.push(i)
+        }
+        const vram = (i) => Number(gpuSensors.objectAt(i).vramTotal.value) || 0
+        return out.sort((a, b) => vram(b) - vram(a))
     }
+    readonly property int gpuCount: gpuPresent.length
+    // Display number (1-based) of a sensor slot.
+    function gpuNumber(slot) { return gpuPresent.indexOf(slot) + 1 }
+    // hiddenGpus holds display positions ("0" = GPU1).
+    readonly property var gpuIndexes: cfg.showGpu ? gpuPresent.filter((slot, k) => cfg.hiddenGpus.indexOf(String(k)) < 0) : []
     Instantiator {
         id: gpuSensors
-        model: root.gpuCount
+        model: root.maxGpus
         delegate: QtObject {
             required property int index
-            property var usage: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/usage"; updateRateLimit: root.rate }
-            property var vram: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/usedVram"; updateRateLimit: root.rate }
-            property var vramTotal: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/totalVram" }
-            property var temp: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/temperature"; updateRateLimit: root.rate }
+            property var usage: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/usage"; updateRateLimit: root.updateRate }
+            property var vram: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/usedVram"; updateRateLimit: root.updateRate }
+            property var temp: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/temperature"; updateRateLimit: root.updateRate }
             property var name: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/name" }
+            property var vramTotal: Sensors.Sensor { sensorId: "gpu/gpu" + index + "/totalVram" }
             property var hist: []
         }
     }
@@ -68,26 +67,23 @@ PlasmoidItem {
     // ---- history ---------------------------------------------------------
     property var hCpu: []
     property var hMem: []
-    property var hDiskR: []
-    property var hDiskW: []
-    property var hDown: []
-    property var hUp: []
+    property var hDisk: []
+    property var hNet: []
     property real peakDisk: 1
     property real peakNet: 1
     property int tick: 0
     function push(a, v) { const b = a.slice(a.length >= historyLength ? 1 : 0); b.push(Math.max(0, v || 0)); return b }
-    function norm(a, peak) { return a.map(v => v / peak) }
     Timer {
-        interval: root.rate; running: true; repeat: true
+        interval: root.updateRate; running: true; repeat: true
         onTriggered: {
             root.hCpu = root.push(root.hCpu, cpu.value / 100)
             root.hMem = root.push(root.hMem, mem.value / 100)
-            root.hDiskR = root.push(root.hDiskR, diskR.value)
-            root.hDiskW = root.push(root.hDiskW, diskW.value)
-            root.hDown = root.push(root.hDown, netDown.value)
-            root.hUp = root.push(root.hUp, netUp.value)
-            root.peakDisk = Math.max(1048576, ...root.hDiskR, ...root.hDiskW)
-            root.peakNet = Math.max(131072, ...root.hDown, ...root.hUp)
+            const d = Number(diskR.value) + Number(diskW.value)
+            const nt = Number(netDown.value) + Number(netUp.value)
+            root.peakDisk = Math.max(1048576, d, root.peakDisk * 0.98)
+            root.peakNet = Math.max(131072, nt, root.peakNet * 0.98)
+            root.hDisk = root.push(root.hDisk, d / root.peakDisk)
+            root.hNet = root.push(root.hNet, nt / root.peakNet)
             for (let i = 0; i < gpuSensors.count; i++) {
                 const g = gpuSensors.objectAt(i)
                 if (g) g.hist = root.push(g.hist, g.usage.value / 100)
@@ -96,14 +92,14 @@ PlasmoidItem {
         }
     }
 
-    function rate(bytes) {
+    function fmtRate(bytes) {
         bytes = Number(bytes) || 0
         const u = ["B", "K", "M", "G"]
         let i = 0
         while (bytes >= 1024 && i < 3) { bytes /= 1024; i++ }
         return (bytes < 10 && i > 0 ? bytes.toFixed(1) : bytes.toFixed(0)) + u[i]
     }
-    function pct(s) { return (Number(s.value) || 0).toFixed(0) + "%" }
+    function pct(v) { return (Number(v) || 0).toFixed(0) + "%" }
 
     // ---- open treetop ----------------------------------------------------
     P5Support.DataSource {
@@ -119,33 +115,35 @@ PlasmoidItem {
     toolTipMainText: "treetop"
     toolTipSubText: {
         tick
-        let t = "CPU " + pct(cpu) + (cpuTemp.value ? " · " + Number(cpuTemp.value).toFixed(0) + "°C" : "")
-        t += "\nMemory " + pct(mem) + " · " + memUsed.formattedValue + " of " + memTotal.formattedValue
-        for (const i of gpuIndexes) {
+        let t = "CPU " + pct(cpu.value) + (cpuTemp.value ? " · " + Number(cpuTemp.value).toFixed(0) + "°C" : "")
+        t += "\nMemory " + pct(mem.value) + " · " + memUsed.formattedValue + " of " + memTotal.formattedValue
+        for (const i of root.gpuPresent) {
             const g = gpuSensors.objectAt(i)
-            if (g) t += "\nGPU" + (i + 1) + " " + pct(g.usage) + " · VRAM " + g.vram.formattedValue + (g.temp.value ? " · " + Number(g.temp.value).toFixed(0) + "°C" : "") + "  (" + g.name.value + ")"
+            if (g) t += "\nGPU" + root.gpuNumber(i) + " " + pct(g.usage.value) + " · VRAM " + g.vram.formattedValue + (g.temp.value ? " · " + Number(g.temp.value).toFixed(0) + "°C" : "") + "  (" + g.name.value + ")"
         }
-        t += "\nDisk read " + rate(diskR.value) + "/s · write " + rate(diskW.value) + "/s"
-        t += "\nNetwork ↓ " + rate(netDown.value) + "/s · ↑ " + rate(netUp.value) + "/s"
+        t += "\nDisk " + pct(diskUse.value) + " used · read " + fmtRate(diskR.value) + "/s · write " + fmtRate(diskW.value) + "/s"
+        t += "\nNetwork ↓ " + fmtRate(netDown.value) + "/s · ↑ " + fmtRate(netUp.value) + "/s"
         return t + "\n\nClick to open treetop"
     }
 
     Plasmoid.contextualActions: [
-        PlasmaCore.Action { text: "Open treetop"; icon.name: "utilities-system-monitor"; onTriggered: root.toggleTreetop() },
-        PlasmaCore.Action { isSeparator: true },
-        PlasmaCore.Action { text: "Show CPU"; checkable: true; checked: Plasmoid.configuration.showCpu; onTriggered: Plasmoid.configuration.showCpu = checked },
-        PlasmaCore.Action { text: "Show memory"; checkable: true; checked: Plasmoid.configuration.showMemory; onTriggered: Plasmoid.configuration.showMemory = checked },
-        PlasmaCore.Action { text: "Show GPU 1"; checkable: true; visible: root.gpuCount > 0; checked: Plasmoid.configuration.hiddenGpus.indexOf("0") < 0; onTriggered: root.setGpu(0, checked) },
-        PlasmaCore.Action { text: "Show GPU 2"; checkable: true; visible: root.gpuCount > 1; checked: Plasmoid.configuration.hiddenGpus.indexOf("1") < 0; onTriggered: root.setGpu(1, checked) },
-        PlasmaCore.Action { text: "Show GPU 3"; checkable: true; visible: root.gpuCount > 2; checked: Plasmoid.configuration.hiddenGpus.indexOf("2") < 0; onTriggered: root.setGpu(2, checked) },
-        PlasmaCore.Action { text: "Show disk"; checkable: true; checked: Plasmoid.configuration.showDisk; onTriggered: Plasmoid.configuration.showDisk = checked },
-        PlasmaCore.Action { text: "Show network"; checkable: true; checked: Plasmoid.configuration.showNetwork; onTriggered: Plasmoid.configuration.showNetwork = checked },
-        PlasmaCore.Action { text: "Graphs behind values"; checkable: true; checked: Plasmoid.configuration.showGraphs; onTriggered: Plasmoid.configuration.showGraphs = checked }
+        PlasmaCore.Action { text: "Open treetop"; icon.name: "utilities-system-monitor"; onTriggered: root.toggleTreetop() }
     ]
-    function setGpu(i, show) {
-        const h = Plasmoid.configuration.hiddenGpus.filter(x => x !== String(i))
-        if (!show) h.push(String(i))
-        Plasmoid.configuration.hiddenGpus = h
+
+    // Plasma needs a full representation to build the compact one; this is
+    // the popup if the widget is ever expanded (clicking opens treetop).
+    switchWidth: Kirigami.Units.gridUnit * 10
+    switchHeight: Kirigami.Units.gridUnit * 6
+    fullRepresentation: ColumnLayout {
+        Layout.minimumWidth: Kirigami.Units.gridUnit * 16
+        Layout.minimumHeight: Kirigami.Units.gridUnit * 8
+        Text {
+            Layout.fillWidth: true
+            text: root.toolTipSubText
+            color: Kirigami.Theme.textColor
+            font.family: "monospace"
+            wrapMode: Text.Wrap
+        }
     }
 
     // Inside the system tray the widget gets an icon-sized slot.
@@ -155,10 +153,11 @@ PlasmoidItem {
     compactRepresentation: MouseArea {
         id: compact
         readonly property bool vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
-        Layout.minimumWidth: root.inTray ? -1 : (vertical ? -1 : grid.implicitWidth)
-        Layout.preferredWidth: root.inTray ? -1 : (vertical ? -1 : grid.implicitWidth)
-        Layout.minimumHeight: root.inTray ? -1 : (vertical ? grid.implicitHeight : -1)
-        Layout.preferredHeight: root.inTray ? -1 : (vertical ? grid.implicitHeight : -1)
+        readonly property real h: vertical ? Math.min(width, Kirigami.Units.gridUnit * 1.6) : height
+        Layout.minimumWidth: root.inTray || vertical ? -1 : strip.implicitWidth
+        Layout.preferredWidth: root.inTray || vertical ? -1 : strip.implicitWidth
+        Layout.minimumHeight: root.inTray || !vertical ? -1 : strip.implicitHeight
+        Layout.preferredHeight: root.inTray || !vertical ? -1 : strip.implicitHeight
         hoverEnabled: true
         onClicked: root.toggleTreetop()
 
@@ -171,14 +170,20 @@ PlasmoidItem {
             height: s
             spacing: Math.max(1, s * 0.06)
             Repeater {
-                model: [
-                    { c: "#43c96b", v: () => cpu.value / 100 },
-                    { c: "#d6b23e", v: () => mem.value / 100 },
-                    { c: "#c06fd8", v: () => { const i = root.gpuIndexes.length ? root.gpuIndexes[root.gpuIndexes.length - 1] : -1; const g = i >= 0 ? gpuSensors.objectAt(i) : null; return g ? g.usage.value / 100 : 0 } },
-                    { c: "#4f8fe0", v: () => (Number(netDown.value) + Number(netUp.value)) / root.peakNet },
-                ]
+                model: 4
                 Item {
-                    required property var modelData
+                    readonly property color c: ["#43c96b", "#d6b23e", "#c06fd8", "#4f8fe0"][index]
+                    readonly property real v: {
+                        root.tick
+                        if (index === 0) return cpu.value / 100
+                        if (index === 1) return mem.value / 100
+                        if (index === 2) {
+                            const i = root.gpuIndexes.length ? root.gpuIndexes[root.gpuIndexes.length - 1] : -1
+                            const g = i >= 0 ? gpuSensors.objectAt(i) : null
+                            return g ? g.usage.value / 100 : 0
+                        }
+                        return (Number(netDown.value) + Number(netUp.value)) / root.peakNet
+                    }
                     width: (parent.s - parent.spacing * 3) / 4
                     height: parent.s
                     Rectangle {
@@ -190,74 +195,83 @@ PlasmoidItem {
                         anchors.bottom: parent.bottom
                         width: parent.width
                         radius: 1
-                        color: modelData.c
-                        height: { root.tick; return Math.max(1, Math.min(1, modelData.v() || 0) * parent.height) }
+                        color: parent.c
+                        height: Math.max(1, Math.min(1, parent.v || 0) * parent.height)
                     }
                 }
             }
         }
 
+        // Panel look: KStats-style strip.
         GridLayout {
-            id: grid
+            id: strip
             visible: !root.inTray
             anchors.fill: parent
             flow: compact.vertical ? GridLayout.TopToBottom : GridLayout.LeftToRight
             rows: compact.vertical ? -1 : 1
             columns: compact.vertical ? 1 : -1
-            columnSpacing: Kirigami.Units.smallSpacing
-            rowSpacing: Kirigami.Units.smallSpacing
-            readonly property real itemSize: compact.vertical ? compact.width : compact.height
+            columnSpacing: Math.round(compact.h * 0.32)
+            rowSpacing: 2
+            readonly property real gw: root.cfg.graphWidth / 100
 
-            MiniStat {
-                visible: Plasmoid.configuration.showCpu
-                Layout.fillHeight: !compact.vertical
-                Layout.preferredWidth: compact.vertical ? -1 : Math.max(implicitWidth, grid.itemSize * 1.6)
-                Layout.preferredHeight: compact.vertical ? grid.itemSize * 0.7 : -1
-                label: "CPU"; value: root.pct(cpu)
-                history: root.hCpu; color: "#43c96b"
-                showGraph: Plasmoid.configuration.showGraphs
+            KStat {
+                visible: root.cfg.showCpu
+                h: compact.h; label: "CPU"; color: "#43c96b"
+                value: (Number(cpu.value) || 0).toFixed(1) + "%"
+                history: root.hCpu
+                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw
             }
-            MiniStat {
-                visible: Plasmoid.configuration.showMemory
-                Layout.fillHeight: !compact.vertical
-                Layout.preferredWidth: compact.vertical ? -1 : Math.max(implicitWidth, grid.itemSize * 1.6)
-                Layout.preferredHeight: compact.vertical ? grid.itemSize * 0.7 : -1
-                label: "MEM"; value: root.pct(mem)
-                history: root.hMem; color: "#d6b23e"
-                showGraph: Plasmoid.configuration.showGraphs
+            KStat {
+                visible: root.cfg.showMemory
+                h: compact.h; label: "MEM"; color: "#4fb3d9"
+                value: (Number(mem.value) || 0).toFixed(1) + "%"
+                history: root.hMem
+                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw
             }
             Repeater {
                 model: root.gpuIndexes
-                MiniStat {
+                KStat {
                     required property int modelData
                     readonly property var g: { root.tick; return gpuSensors.objectAt(modelData) }
-                    Layout.fillHeight: !compact.vertical
-                    Layout.preferredWidth: compact.vertical ? -1 : Math.max(implicitWidth, grid.itemSize * 1.6)
-                    Layout.preferredHeight: compact.vertical ? grid.itemSize * 0.7 : -1
-                    label: "GPU" + (modelData + 1); value: g ? root.pct(g.usage) : "–"
-                    history: g ? g.hist : []; color: "#c06fd8"
-                    showGraph: Plasmoid.configuration.showGraphs
+                    h: compact.h
+                    label: root.gpuIndexes.length > 1 ? "GPU" + root.gpuNumber(modelData) : "GPU"
+                    color: "#c06fd8"
+                    value: g ? (Number(g.usage.value) || 0).toFixed(0) + "%" : "–"
+                    history: g ? g.hist : []
+                    showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw
                 }
             }
-            MiniStat {
-                visible: Plasmoid.configuration.showDisk
-                Layout.fillHeight: !compact.vertical
-                Layout.preferredWidth: compact.vertical ? -1 : Math.max(implicitWidth, grid.itemSize * 1.8)
-                Layout.preferredHeight: compact.vertical ? grid.itemSize * 0.7 : -1
-                label: "DISK"; value: root.rate(Number(diskR.value) + Number(diskW.value))
-                history: root.norm(root.hDiskR, root.peakDisk); history2: root.norm(root.hDiskW, root.peakDisk)
-                color: "#4fb3d9"; color2: "#e0894f"
-                showGraph: Plasmoid.configuration.showGraphs
+            KStat {
+                visible: root.cfg.showDisk
+                h: compact.h; label: "DSK"; color: "#e0894f"
+                readonly property bool io: root.cfg.diskMode === "io"
+                value: io ? root.fmtRate(Number(diskR.value) + Number(diskW.value)) + "/s" : (Number(diskUse.value) || 0).toFixed(1) + "%"
+                bar: !io
+                fill: (Number(diskUse.value) || 0) / 100
+                history: root.hDisk
+                showGraph: io && root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw
             }
-            MiniStat {
-                visible: Plasmoid.configuration.showNetwork
-                Layout.fillHeight: !compact.vertical
-                Layout.preferredWidth: compact.vertical ? -1 : Math.max(implicitWidth, grid.itemSize * 1.8)
-                Layout.preferredHeight: compact.vertical ? grid.itemSize * 0.7 : -1
-                label: "NET"; value: "↓" + root.rate(netDown.value)
-                history: root.norm(root.hDown, root.peakNet); history2: root.norm(root.hUp, root.peakNet)
-                color: "#4f8fe0"; color2: "#e05a4f"
-                showGraph: Plasmoid.configuration.showGraphs
+            // Network: arrows and two stacked rates, like KStats.
+            RowLayout {
+                visible: root.cfg.showNetwork
+                spacing: Math.round(compact.h * 0.18)
+                Text {
+                    text: "NET"
+                    color: root.cfg.colorLabels ? "#b07fe0" : Kirigami.Theme.textColor
+                    font.pixelSize: Math.round(compact.h * 0.42)
+                    font.bold: true
+                    renderType: Text.NativeRendering
+                }
+                Column {
+                    spacing: -2
+                    Text { text: "↑"; color: "#b07fe0"; font.pixelSize: Math.round(compact.h * 0.34); renderType: Text.NativeRendering }
+                    Text { text: "↓"; color: "#b07fe0"; font.pixelSize: Math.round(compact.h * 0.34); renderType: Text.NativeRendering }
+                }
+                Column {
+                    spacing: -2
+                    Text { text: root.fmtRate(netUp.value) + "/s"; color: Kirigami.Theme.textColor; font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.34); renderType: Text.NativeRendering }
+                    Text { text: root.fmtRate(netDown.value) + "/s"; color: Kirigami.Theme.textColor; font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.34); renderType: Text.NativeRendering }
+                }
             }
         }
     }
