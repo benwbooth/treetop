@@ -56,7 +56,7 @@ RowLayout {
         Layout.preferredWidth: stat.inside
             ? Math.max(valueInside.implicitWidth + 4, Math.round(stat.h * 1.56 * stat.graphWidthFactor))
             : (stat.bar ? Math.round(stat.h * 0.4) : Math.round(stat.h * 1.56 * stat.graphWidthFactor))
-        Layout.preferredHeight: Math.round(stat.h * 0.62)
+        Layout.preferredHeight: Math.round(stat.h * 0.8)
         color: "transparent"
         border.color: Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.55)
         border.width: 1
