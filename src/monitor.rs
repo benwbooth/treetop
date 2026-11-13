@@ -209,6 +209,7 @@ impl cxx_qt::Initialize for qobject::Monitor {
                             out["gpus"][i]["engines"] = json!(e);
                         }
                         out["procs"] = s.procs.summary();
+                        out["top"] = s.procs.top();
                         let mut notices = actions.drain();
                         if let Some(f) = s.procs.focus {
                             if !s.procs.procs.contains_key(&f) {

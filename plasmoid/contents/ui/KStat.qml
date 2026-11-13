@@ -16,6 +16,9 @@ RowLayout {
     property bool colorLabel: true
     property real graphWidthFactor: 1
     property real h: 22
+    // Reports hover, so the widget's tooltip can show who's using this.
+    signal hoverChanged(bool on)
+    HoverHandler { onHoveredChanged: stat.hoverChanged(hovered) }
     // Draw the value on top of the graph (compact) instead of beside it.
     property bool overlay: true
     // Write the label sideways (bottom to top), so a full name takes the

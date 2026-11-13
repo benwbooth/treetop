@@ -159,18 +159,88 @@ PlasmoidItem {
             + " || setsid treetop >/dev/null 2>&1 &")
     }
 
-    toolTipMainText: "treetop"
-    toolTipSubText: {
-        tick
-        let t = "CPU " + pct(cpu.value) + (cpuTemp.value ? " · " + Number(cpuTemp.value).toFixed(0) + "°C" : "")
-        t += "\nMemory " + pct(mem.value) + " · " + memUsed.formattedValue + " of " + memTotal.formattedValue
-        for (const i of root.gpuPresent) {
-            const g = gpuSensors.objectAt(i)
-            if (g) t += "\nGPU" + root.gpuNumber(i) + " " + pct(g.usage.value) + " · VRAM " + g.vram.formattedValue + (g.temp.value ? " · " + Number(g.temp.value).toFixed(0) + "°C" : "") + "  (" + g.name.value + ")"
+    // ---- "who's using it" tooltips ---------------------------------------
+    // Hovering an item asks the treetop app (over D-Bus) for the top
+    // programs using that resource, refreshed while the pointer stays.
+    property string hoverKind: ""
+    property var topData: null
+    function setHover(kind, on) {
+        if (on) hoverKind = kind
+        else if (hoverKind === kind) hoverKind = ""
+    }
+    P5Support.DataSource {
+        id: topProbe
+        engine: "executable"
+        connectedSources: []
+        onNewData: (source, data) => {
+            try { root.topData = JSON.parse(JSON.parse(String(data.stdout)).data[0]) }
+            catch (e) { root.topData = null }
+            disconnectSource(source)
         }
-        t += "\nDisk " + pct(diskUse.value) + " used · read " + fmtRate(diskR.value) + "/s · write " + fmtRate(diskW.value) + "/s"
-        t += "\nNetwork ↓ " + fmtRate(netDown.value) + "/s · ↑ " + fmtRate(netUp.value) + "/s"
-        return t + "\n\nClick to open treetop"
+    }
+    Timer {
+        interval: 1500; repeat: true; triggeredOnStart: true
+        running: root.hoverKind !== ""
+        onTriggered: topProbe.connectSource("busctl --user --json=short call com.benwbooth.treetop /treetop com.benwbooth.treetop Top")
+    }
+    function fmtTop(kind, v) {
+        if (kind === "cpu" || kind === "gpu") return v.toFixed(v < 10 ? 1 : 0) + "%"
+        if (kind === "mem" || kind === "vram") return fmtRate(v)
+        return fmtRate(v) + "/s"
+    }
+    readonly property var kindTitle: ({ cpu: "CPU", mem: "Memory", gpu: "GPU", vram: "VRAM", disk: "Disk I/O", net: "Network" })
+    readonly property var kindColor: ({ cpu: palette.cpu, mem: palette.mem, gpu: palette.gpu, vram: palette.vram, disk: palette.disk, net: palette.net })
+    function topText(kind) {
+        if (!topData || !topData[kind]) return c(Kirigami.Theme.disabledTextColor, "Open treetop to see which programs are using this.")
+        const list = topData[kind]
+        if (!list.length) return c(Kirigami.Theme.disabledTextColor, "Nothing is using it right now.")
+        let t = "<table cellspacing='1'>"
+        for (const x of list)
+            t += "<tr><td align='right'>" + c(kindColor[kind], "<b>" + fmtTop(kind, x.v) + "</b>") + "</td><td>&nbsp;&nbsp;" + esc(x.name)
+                + "</td><td>&nbsp;" + c(Kirigami.Theme.disabledTextColor, x.n > 1 ? "×" + x.n : "") + "</td></tr>"
+        t += "</table>"
+        if (kind === "net" || kind === "disk")
+            t += c(Kirigami.Theme.disabledTextColor, "<br>Other users' processes need root access in treetop.")
+        return t
+    }
+
+    toolTipMainText: hoverKind ? kindTitle[hoverKind] + " — top programs" : "treetop"
+    toolTipTextFormat: Text.RichText
+    toolTipSubText: hoverKind ? topText(hoverKind) : summaryText
+    // Short GPU name: "Navi 31 [Radeon RX 7900 XT/...] (TUF Gaming Radeon RX
+    // 7900 XTX OC)" -> "Radeon RX 7900 XTX"; "Raphael [Radeon 610M]" -> "Radeon 610M".
+    function shortGpuName(n) {
+        n = String(n || "")
+        const paren = n.match(/\(([^)]*)\)\s*$/)
+        if (paren) {
+            const m = paren[1].match(/(Radeon|GeForce|Arc|Quadro|RTX|GTX|Intel)[^)]*/)
+            if (m) return m[0].replace(/\s+(OC|Gaming|Edition)\b.*$/, "").trim()
+        }
+        const br = n.match(/\[([^\]]*)\]/)
+        if (br) return br[1].split("/")[0].trim()
+        return n.length > 28 ? n.slice(0, 27) + "…" : n
+    }
+    function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
+    function c(color, t) { return "<font color='" + color + "'>" + t + "</font>" }
+    function row(label, color, value, detail) {
+        return "<tr><td>" + c(color, "<b>" + label + "</b>") + "</td><td align='right'>&nbsp;<b>" + value + "</b></td><td>&nbsp;&nbsp;"
+            + c(Kirigami.Theme.disabledTextColor, detail || "") + "</td></tr>"
+    }
+    readonly property string summaryText: {
+        tick
+        let t = "<table cellspacing='1'>"
+        t += row("CPU", palette.cpu, pct(cpu.value), cpuTemp.value ? Number(cpuTemp.value).toFixed(0) + "°C" : "")
+        t += row("Memory", palette.mem, pct(mem.value), memUsed.formattedValue + " of " + memTotal.formattedValue)
+        for (const i of root.gpuIndexes) {
+            const g = gpuSensors.objectAt(i)
+            if (!g) continue
+            const n = root.gpuIndexes.length > 1 ? "GPU" + root.gpuNumber(i) : "GPU"
+            t += row(n, palette.gpu, pct(g.usage.value), esc(shortGpuName(g.name.value)) + (g.temp.value ? " · " + Number(g.temp.value).toFixed(0) + "°C" : ""))
+            t += row("VRAM", palette.vram, ((Number(g.usedVram.value) || 0) / Math.max(1, Number(g.vramTotal.value) || 0) * 100).toFixed(0) + "%", g.vram.formattedValue)
+        }
+        t += row("Disk", palette.disk, pct(diskUse.value), "read " + fmtRate(diskR.value) + "/s · write " + fmtRate(diskW.value) + "/s")
+        t += row("Network", palette.net, "↓" + fmtRate(netDown.value), "↑" + fmtRate(netUp.value) + "/s")
+        return t + "</table><br>" + c(Kirigami.Theme.disabledTextColor, "Click to open treetop · hover an item for its top users")
     }
 
     Plasmoid.contextualActions: [
@@ -267,6 +337,7 @@ PlasmoidItem {
             KStat {
                 visible: root.cfg.showCpu
                 h: compact.h; label: root.lbl("CPU", "C"); color: root.palette.cpu
+                onHoverChanged: (on) => root.setHover("cpu", on)
                 value: (Number(cpu.value) || 0).toFixed(0) + "%"
                 history: root.hCpu
                 showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
@@ -274,6 +345,7 @@ PlasmoidItem {
             KStat {
                 visible: root.cfg.showMemory
                 h: compact.h; label: root.lbl("MEM", "M"); color: root.palette.mem
+                onHoverChanged: (on) => root.setHover("mem", on)
                 value: (Number(mem.value) || 0).toFixed(0) + "%"
                 history: root.hMem
                 showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
@@ -288,6 +360,7 @@ PlasmoidItem {
                     KStat {
                         h: compact.h
                         label: root.lbl("GPU", "G") + parent.n
+                        onHoverChanged: (on) => root.setHover("gpu", on)
                         color: root.palette.gpu
                         value: parent.g ? (Number(parent.g.usage.value) || 0).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.hist : []
@@ -298,6 +371,7 @@ PlasmoidItem {
                         visible: root.cfg.showVram
                         h: compact.h
                         label: root.lbl("VRAM", "V") + parent.n
+                        onHoverChanged: (on) => root.setHover("vram", on)
                         color: root.palette.vram
                         value: parent.g ? ((Number(parent.g.usedVram.value) || 0) / Math.max(1, Number(parent.g.vramTotal.value) || 0) * 100).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.vhist : []
@@ -308,6 +382,7 @@ PlasmoidItem {
             KStat {
                 visible: root.cfg.showDisk
                 h: compact.h; label: root.lbl("DISK", "D"); color: root.palette.disk
+                onHoverChanged: (on) => root.setHover("disk", on)
                 readonly property bool io: root.cfg.diskMode === "io"
                 value: io ? root.fmtRate(Number(diskR.value) + Number(diskW.value)) : (Number(diskUse.value) || 0).toFixed(0) + "%"
                 bar: !io
@@ -318,6 +393,7 @@ PlasmoidItem {
             // Network: arrows and two stacked rates, like KStats.
             RowLayout {
                 visible: root.cfg.showNetwork
+                HoverHandler { onHoveredChanged: root.setHover("net", hovered) }
                 spacing: Math.round(compact.h * 0.08)
                 Item {
                     visible: root.lbl("NET", "N").length > 0

@@ -858,6 +858,54 @@ impl Processes {
         out
     }
 
+    /// The top users of each resource, grouped by program name (so many
+    /// browser processes count as one entry), for the panel widget's
+    /// "who's using it" tooltips.
+    pub fn top(&self) -> Value {
+        let measure = |p: &Proc, kind: &str| -> f64 {
+            match kind {
+                "cpu" => p.cpu,
+                "mem" => p.res as f64,
+                "gpu" => p.gpu,
+                "vram" => p.vram as f64,
+                "disk" => p.io_r.max(0.0) + p.io_w.max(0.0),
+                _ => self.net_of(p),
+            }
+        };
+        let mut out = serde_json::Map::new();
+        for kind in ["cpu", "mem", "gpu", "vram", "disk", "net"] {
+            let mut by_name: HashMap<String, (f64, usize)> = HashMap::new();
+            if kind == "net" {
+                // Containers' traffic is known per container: count it once,
+                // under the container's name.
+                let names = self.names.lock().unwrap();
+                for (id, (rx, tx)) in &self.cnet {
+                    if rx + tx > 0.0 {
+                        let n = names.get(id).map(|c| c.name.clone()).unwrap_or_else(|| id[..12].to_string());
+                        by_name.insert(format!("⬢ {n}"), (rx + tx, 1));
+                    }
+                }
+            }
+            for p in self.procs.values().filter(|p| !p.kernel) {
+                let v = if kind == "net" {
+                    if p.container.is_some() { 0.0 } else { self.root.as_ref().and_then(|r| r.net.get(&p.pid)).map(|v| v.0 + v.1).unwrap_or(0.0) }
+                } else {
+                    measure(p, kind)
+                };
+                if v > 0.0 {
+                    let e = by_name.entry(p.name.clone()).or_insert((0.0, 0));
+                    e.0 += v;
+                    e.1 += 1;
+                }
+            }
+            let mut list: Vec<(String, f64, usize)> = by_name.into_iter().map(|(n, (v, c))| (n, v, c)).collect();
+            list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            list.truncate(5);
+            out.insert(kind.into(), json!(list.iter().map(|(n, v, c)| json!({"name": n, "v": v, "n": c})).collect::<Vec<_>>()));
+        }
+        Value::Object(out)
+    }
+
     pub fn summary(&self) -> Value {
         let tasks = self.procs.values().filter(|p| !p.kernel).count();
         let kthreads = self.procs.values().filter(|p| p.kernel).count();

@@ -36,11 +36,19 @@ public:
         return QStringLiteral(
             "<interface name=\"com.benwbooth.treetop\">"
             "<method name=\"Toggle\"/><method name=\"Show\"/><method name=\"Hide\"/>"
+            "<method name=\"Top\"><arg type=\"s\" direction=\"out\"/></method>"
             "</interface>");
     }
     bool handleMessage(const QDBusMessage &message, const QDBusConnection &connection) override
     {
         const QString m = message.member();
+        if (m == QLatin1String("Top")) {
+            // Top users of each resource, as JSON (for the panel widget).
+            QVariant json;
+            QMetaObject::invokeMethod(m_root, "topJson", Qt::DirectConnection, Q_RETURN_ARG(QVariant, json));
+            connection.send(message.createReply(json.toString()));
+            return true;
+        }
         const char *slot = m == QLatin1String("Toggle") ? "toggleWindow"
                          : m == QLatin1String("Show") ? "showWindow"
                          : m == QLatin1String("Hide") ? "hideWindow" : nullptr;

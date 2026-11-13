@@ -221,6 +221,7 @@ ApplicationWindow {
                 || (snap.disk.filesystems || []).length !== s.disk.filesystems.length
                 || snap.gpus.length !== s.gpus.length
             snap = s
+            if (s.top) top = s.top
             if (recount) Qt.callLater(updatePlan)
             for (const n of s.notices) showStatus(n)
         }
@@ -286,6 +287,9 @@ ApplicationWindow {
         win.requestActivate()
     }
     function hideWindow() { win.hide() }
+    // For the D-Bus Top() call (panel widget tooltips).
+    property var top: ({})
+    function topJson() { return JSON.stringify(top) }
     // Open (and not minimized) -> hide; otherwise show. Not "focused": a
     // click on the panel widget or tray takes focus away first.
     function toggleWindow() {
