@@ -63,7 +63,7 @@ ApplicationWindow {
             switch (name) {
             case "cpu": return settings.cpuCombined ? 2 : 1 + Math.ceil(nCores / coreColsFor(colW))
             case "mem": return 1 + (sectionOpen("mem") ? ((snap.mem.swapTotal || 0) > 0 ? 2 : 1) : 0)
-            case "gpu": return snap.gpus.length === 0 ? 0 : 1 + (sectionOpen("gpu") ? 2 * gpus.length + hiddenGpuList.length : 0)
+            case "gpu": return snap.gpus.length === 0 ? 0 : 1 + (sectionOpen("gpu") ? 3 * gpus.length + hiddenGpuList.length : 0)
             case "storage": return 1 + (sectionOpen("storage") ? fsCount : 0)
             case "system": return 1 + (sectionOpen("system") ? 3 : 0)
             }
@@ -435,6 +435,8 @@ ApplicationWindow {
                     readonly property var g: win.gpus[index] || ({ busy: 0, number: 0, index: 0 })
                     Layout.fillWidth: true
                     title: "GPU " + g.number; accent: win.cMagenta; textColor: win.textColor; dimColor: win.dimColor; font: win.mono
+                    collapsible: true
+                    onCollapseRequested: win.hideGpu(g.pdev)
                     value: (g.busy || 0).toFixed(0) + "%"
                     detail: Fmt.bytes(g.vramUsed) + " / " + Fmt.bytes(g.vramTotal)
                         + (g.temp ? " · " + g.temp.toFixed(0) + "°C" : "")
@@ -667,15 +669,24 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         spacing: 1
                         TapHandler { acceptedButtons: Qt.RightButton; onTapped: gpuMenu.openFor(parent.g) }
-                        TapHandler { onTapped: win.setView("gpu") }
                         HoverHandler { id: gh }
-                        ToolTip.text: (g.name || "") + "\nClick for the GPU view · right-click to hide"
+                        ToolTip.text: (g.name || "") + "\n▾ hides it · the GPU card or g opens the GPU view"
                         ToolTip.visible: gh.hovered
                         ToolTip.delay: 800
+                        Text {
+                            // One click hides this GPU (it leaves "▸ GPUn hidden · + show").
+                            text: "▾ GPU" + parent.g.number + "  " + (parent.g.name || "")
+                            font: win.mono
+                            color: hideHover.hovered ? win.cMagenta : win.dimColor
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            HoverHandler { id: hideHover; cursorShape: Qt.PointingHandCursor }
+                            TapHandler { onTapped: win.hideGpu(parent.parent.g.pdev) }
+                        }
                         Meter {
                             Layout.fillWidth: true
                             font: win.mono; textColor: win.textColor; trackColor: win.trackColor
-                            label: "GPU" + parent.g.number
+                            label: "busy"
                             labelWidth: 5 * win.mono.pointSize
                             segments: [{ value: parent.g.busy || 0, color: win.cMagenta }]
                             text: (parent.g.busy || 0).toFixed(0) + "%" + (parent.g.temp ? " " + parent.g.temp.toFixed(0) + "°C" : "") + (parent.g.power ? " " + parent.g.power.toFixed(0) + "W" : "")

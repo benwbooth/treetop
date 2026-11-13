@@ -55,6 +55,13 @@ Rectangle {
 
         RowLayout {
             Layout.fillWidth: true
+            Text {
+                text: "▾"
+                color: panelHide.hovered ? panel.accent : panel.dimColor
+                font: panel.font
+                HoverHandler { id: panelHide; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: panel.hideRequested() }
+            }
             Text { text: "GPU" + panel.number; font.family: panel.font.family; font.pointSize: panel.font.pointSize; font.bold: true; color: panel.accent }
             Text { text: panel.gpu.name || ""; font: panel.font; color: panel.textColor; Layout.fillWidth: true; elide: Text.ElideRight }
             Text { text: (panel.gpu.link || "") + (panel.gpu.perfLevel ? "  ·  dpm " + panel.gpu.perfLevel : "") + "  ·  " + (panel.gpu.pdev || ""); font: panel.font; color: panel.dimColor }

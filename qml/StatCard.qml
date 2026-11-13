@@ -15,6 +15,9 @@ Rectangle {
     property color dimColor
     property font font
     signal clicked()
+    // A ▾ before the title that hides the card (e.g. a GPU).
+    property bool collapsible: false
+    signal collapseRequested()
 
     radius: 6
     color: Qt.rgba(accent.r, accent.g, accent.b, hover.hovered ? 0.14 : 0.08)
@@ -31,6 +34,15 @@ Rectangle {
         spacing: 1
         RowLayout {
             Layout.fillWidth: true
+            Text {
+                visible: card.collapsible
+                text: "▾"
+                color: collapseHover.hovered ? card.accent : card.dimColor
+                font.pointSize: card.font.pointSize
+                font.family: card.font.family
+                HoverHandler { id: collapseHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: card.collapseRequested() }
+            }
             Text { text: card.title; color: card.accent; font.bold: true; font.pointSize: card.font.pointSize; font.family: card.font.family; Layout.fillWidth: true; elide: Text.ElideRight }
             Text { text: card.value; color: card.textColor; font.bold: true; font.pointSize: card.font.pointSize * 1.25; font.family: card.font.family }
         }
