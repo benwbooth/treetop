@@ -318,13 +318,22 @@ PlasmoidItem {
                 Item {
                     visible: root.lbl("NET", "N").length > 0
                     Layout.alignment: Qt.AlignVCenter
-                    implicitWidth: root.vlabels ? netLabel.implicitHeight : netLabel.implicitWidth
-                    implicitHeight: root.vlabels ? netLabel.implicitWidth : netLabel.implicitHeight
+                    implicitWidth: root.slabels ? netStacked.implicitWidth : (root.vlabels ? netLabel.implicitHeight : netLabel.implicitWidth)
+                    implicitHeight: root.slabels ? netStacked.implicitHeight : (root.vlabels ? netLabel.implicitWidth : netLabel.implicitHeight)
+                    StackedLabel {
+                        id: netStacked
+                        visible: root.slabels
+                        anchors.centerIn: parent
+                        text: "NET"
+                        h: compact.h
+                        color: root.cfg.colorLabels ? root.palette.net : Kirigami.Theme.textColor
+                    }
                     Text {
                         id: netLabel
+                        visible: !root.slabels
                         anchors.centerIn: parent
                         rotation: root.vlabels ? -90 : 0
-                        text: root.slabels ? "N\nE\nT" : root.lbl("NET", "N")
+                        text: root.lbl("NET", "N")
                         horizontalAlignment: Text.AlignHCenter
                         lineHeightMode: root.slabels ? Text.FixedHeight : Text.ProportionalHeight
                         lineHeight: root.slabels ? Math.floor(compact.h * 0.92 / 4) : 1

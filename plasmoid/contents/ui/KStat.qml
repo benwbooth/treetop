@@ -27,19 +27,12 @@ RowLayout {
 
     spacing: Math.round(h * 0.06)
 
-    Text {
+    StackedLabel {
         visible: stat.stackedLabel && stat.label.length > 0
         Layout.alignment: Qt.AlignVCenter
-        text: stat.label.split("").join("\n")
-        horizontalAlignment: Text.AlignHCenter
-        // Fixed line height sized for four letters (VRAM, DISK), the same
-        // for every label so they look even.
-        lineHeightMode: Text.FixedHeight
-        lineHeight: Math.floor(stat.h * 0.92 / 4)
+        text: stat.label
+        h: stat.h
         color: stat.colorLabel ? stat.color : Kirigami.Theme.textColor
-        font.pixelSize: Math.max(5, Math.floor(stat.h * 0.92 / 4 * 0.8))
-        font.bold: true
-        renderType: Text.NativeRendering
     }
     Item {
         visible: stat.verticalLabel && stat.label.length > 0
