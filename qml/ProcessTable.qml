@@ -909,7 +909,7 @@ FocusScope {
                             anchors.margins: 1
                             radius: 3
                             visible: parent.canToggle && expHover.hovered
-                            color: Qt.rgba(table.textColor.r, table.textColor.g, table.textColor.b, 0.12)
+                            color: Qt.rgba(0.34, 0.71, 0.88, 0.18)
                         }
                         Text {
                             id: treeLines
@@ -925,8 +925,11 @@ FocusScope {
                             width: table.cw * 2
                             text: parent.canToggle ? (rowItem.expanded ? "▾" : "▸") : ""
                             font.family: table.font.family
-                            font.pointSize: table.font.pointSize
-                            font.bold: expHover.hovered
+                            // A little larger than the text, to be easy to see and hit.
+                            font.pointSize: table.font.pointSize * 1.35
+                            horizontalAlignment: Text.AlignHCenter
+                            // Same weight on hover (a bold ▾ may not exist in
+                            // the font, which made it vanish); colour only.
                             color: expHover.hovered ? "#56b6e0" : rowItem.fg
                             anchors.verticalCenter: parent.verticalCenter
                         }

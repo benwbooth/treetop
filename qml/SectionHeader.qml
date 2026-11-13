@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 
 // A clickable "▾ Title  summary" line that folds a meter section away.
@@ -7,7 +8,11 @@ Item {
     property string title
     property string summary
     property bool open: true
+    // An optional small link at the end of the line (e.g. "+1 hidden").
+    property string actionText: ""
+    property string actionTip: ""
     signal toggled()
+    signal action()
     implicitHeight: row.implicitHeight + 2
 
     Rectangle {
@@ -34,6 +39,19 @@ Item {
             font: win.mono
             color: win.dimColor
             elide: Text.ElideRight
+        }
+        Text {
+            visible: h.actionText.length > 0
+            text: h.actionText
+            font.family: win.mono.family
+            font.pointSize: win.mono.pointSize
+            font.underline: actHover.hovered
+            color: actHover.hovered ? win.cMagenta : win.dimColor
+            HoverHandler { id: actHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: h.action() }
+            ToolTip.visible: actHover.hovered && h.actionTip.length > 0
+            ToolTip.text: h.actionTip
+            ToolTip.delay: 400
         }
     }
 }

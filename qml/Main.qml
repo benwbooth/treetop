@@ -80,7 +80,7 @@ ApplicationWindow {
             switch (name) {
             case "cpu": return settings.cpuCombined ? 2 : 1 + Math.ceil(nCores / coreColsFor(colW))
             case "mem": return 1 + (sectionOpen("mem") ? ((snap.mem.swapTotal || 0) > 0 ? 2 : 1) : 0)
-            case "gpu": return snap.gpus.length === 0 ? 0 : 1 + (sectionOpen("gpu") ? 3 * gpus.length + hiddenGpuList.length : 0)
+            case "gpu": return snap.gpus.length === 0 ? 0 : 1 + (sectionOpen("gpu") ? 3 * gpus.length : 0)
             case "storage": return 1 + (sectionOpen("storage") ? fsCount : 0)
             case "system": return 1 + (sectionOpen("system") ? 3 : 0)
             }
@@ -454,6 +454,19 @@ ApplicationWindow {
                             enabled: !win.snap.rootStarting
                             onTriggered: { settings.rootMode = !win.snap.root; mon.set_root_mode(!win.snap.root) }
                         }
+                        Menu {
+                            title: "GPUs"
+                            Repeater {
+                                model: win.snap.gpus.length
+                                MenuItem {
+                                    readonly property var g: win.allGpus[index] || ({})
+                                    text: "GPU" + (index + 1) + " — " + (g.name || "") + (g.idle ? "  (idle)" : "")
+                                    checkable: true
+                                    checked: win.gpus.some(x => x.pdev === g.pdev)
+                                    onTriggered: win.setGpuShown(g.pdev, !win.gpus.some(x => x.pdev === g.pdev))
+                                }
+                            }
+                        }
                         MenuSeparator {}
                         MenuItem { text: "Show resources (r)"; checkable: true; checked: settings.showResources; onTriggered: settings.showResources = !settings.showResources }
                         MenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
@@ -507,6 +520,22 @@ ApplicationWindow {
                         checked: win.hiddenGpus.indexOf(g.pdev) < 0
                         onTriggered: win.setGpuShown(g.pdev, !(win.hiddenGpus.indexOf(g.pdev) < 0))
                     }
+                }
+            }
+        }
+
+        // Which GPUs to show (from the GPU section's "+N hidden" link).
+        Menu {
+            id: gpuChooser
+            MenuItem { text: "GPUs to show"; enabled: false }
+            Repeater {
+                model: win.snap.gpus.length
+                MenuItem {
+                    readonly property var g: win.allGpus[index] || ({})
+                    text: "GPU" + (index + 1) + " — " + (g.name || "") + (g.idle ? "  (idle)" : "")
+                    checkable: true
+                    checked: win.gpus.some(x => x.pdev === g.pdev)
+                    onTriggered: win.setGpuShown(g.pdev, !win.gpus.some(x => x.pdev === g.pdev))
                 }
             }
         }
@@ -566,17 +595,6 @@ ApplicationWindow {
                     HoverHandler { id: gpuHover }
                     onClicked: win.setView(win.view === "gpu" ? "tree" : "gpu")
                     TapHandler { acceptedButtons: Qt.RightButton; onTapped: gpuMenu.openFor(parent.g) }
-                }
-            }
-            Repeater {
-                model: win.hiddenGpuList.length
-                HiddenChip {
-                    readonly property var g: win.hiddenGpuList[index] || ({})
-                    Layout.preferredWidth: implicitWidth
-                    Layout.preferredHeight: 92
-                    Layout.maximumHeight: 92
-                    label: "GPU " + g.number + "\n" + (g.reason || "hidden")
-                    onRestore: win.setGpuShown(g.pdev, true)
                 }
             }
             StatCard {
@@ -776,7 +794,10 @@ ApplicationWindow {
                     title: "GPU"
                     open: win.sectionOpen("gpu")
                     summary: win.gpus.map(g => "GPU" + g.number + " " + g.busy.toFixed(0) + "%").join(" · ")
-                        + (win.hiddenGpuList.length ? (win.gpus.length ? " · " : "") + win.hiddenGpuList.map(g => "GPU" + g.number + " " + g.reason).join(" · ") : "")
+                    // Hidden GPUs take no space; this link brings them back.
+                    actionText: win.hiddenGpuList.length ? "+" + win.hiddenGpuList.length + " hidden" : ""
+                    actionTip: win.hiddenGpuList.map(g => "GPU" + g.number + " (" + (g.name || "") + ") — " + g.reason).join("\n") + "\nClick to choose which GPUs to show"
+                    onAction: gpuChooser.popup()
                     onToggled: win.toggleSection("gpu")
                 }
                 Repeater {
@@ -819,16 +840,7 @@ ApplicationWindow {
                         }
                     }
                 }
-                Repeater {
-                    model: win.sectionOpen("gpu") ? win.hiddenGpuList.length : 0
-                    HiddenChip {
-                        readonly property var g: win.hiddenGpuList[index] || ({})
-                        Layout.fillWidth: true
-                        inline: true
-                        label: "GPU" + g.number + " " + (g.reason || "hidden") + (g.reason === "idle" ? " (" + (g.name || "") + ")" : "")
-                        onRestore: win.setGpuShown(g.pdev, true)
-                    }
-                }
+
             }
         }
 
