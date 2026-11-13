@@ -44,6 +44,9 @@ pub mod qobject {
         fn set_show_kernel(self: &Monitor, show: bool);
         #[qinvokable]
         fn set_frozen(self: &Monitor, frozen: bool);
+        /// Show only this process's tree (0 shows everything again).
+        #[qinvokable]
+        fn set_focus(self: &Monitor, pid: i32);
         #[qinvokable]
         fn send_signal(self: &Monitor, pids: &QString, signal: i32) -> QString;
         #[qinvokable]
@@ -161,7 +164,14 @@ impl cxx_qt::Initialize for qobject::Monitor {
                             out["gpus"][i]["engines"] = json!(e);
                         }
                         out["procs"] = s.procs.summary();
-                        out["notices"] = json!(actions.drain());
+                        let mut notices = actions.drain();
+                        if let Some(f) = s.procs.focus {
+                            if !s.procs.procs.contains_key(&f) {
+                                s.procs.focus = None;
+                                notices.push(format!("PID {f} exited; showing everything again"));
+                            }
+                        }
+                        out["notices"] = json!(notices);
                         out
                     };
                     st.relayout = false;
@@ -252,6 +262,11 @@ impl qobject::Monitor {
 
     fn set_show_kernel(&self, show: bool) {
         self.with_state(|s| s.procs.show_kernel = show);
+    }
+
+    fn set_focus(&self, pid: i32) {
+        // Reset the row diff so the view rebuilds cleanly around the focus.
+        self.with_state(|s| s.procs.focus = (pid > 0).then_some(pid));
     }
 
     fn set_frozen(&self, frozen: bool) {

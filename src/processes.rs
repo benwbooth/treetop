@@ -107,6 +107,8 @@ pub struct Processes {
     pub gpu_order: Vec<String>,
     /// While set (pointer over the list), sibling order is kept exactly.
     pub frozen: bool,
+    /// Focus mode: only this process and its descendants are shown.
+    pub focus: Option<i32>,
     prev_rank: RefCell<HashMap<i32, usize>>,
 }
 
@@ -145,6 +147,7 @@ impl Processes {
             gpu: gpu::spawn_poller(),
             gpu_order: Vec::new(),
             frozen: false,
+            focus: None,
             prev_rank: RefCell::new(HashMap::new()),
         }
     }
@@ -516,9 +519,33 @@ impl Processes {
         Some(keep)
     }
 
+    /// The focused process and all its descendants.
+    fn subtree(&self, root: i32) -> HashSet<i32> {
+        let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
+        for p in self.procs.values() {
+            if p.ppid != p.pid {
+                children.entry(p.ppid).or_default().push(p.pid);
+            }
+        }
+        let mut set = HashSet::new();
+        let mut stack = vec![root];
+        while let Some(pid) = stack.pop() {
+            if set.insert(pid) {
+                if let Some(c) = children.get(&pid) {
+                    stack.extend(c);
+                }
+            }
+        }
+        set
+    }
+
     pub fn rows(&self) -> Vec<Value> {
         let names = self.names.lock().unwrap().clone();
         let mut pids: Vec<i32> = self.procs.values().filter(|p| self.visible(p)).map(|p| p.pid).collect();
+        if let Some(f) = self.focus.filter(|f| self.procs.contains_key(f)) {
+            let keep = self.subtree(f);
+            pids.retain(|p| keep.contains(p));
+        }
         let mut out = Vec::new();
         match self.view {
             View::Flat | View::Gpu => {
@@ -627,6 +654,20 @@ impl Processes {
         let running = self.procs.values().filter(|p| p.state == 'R').count();
         let containers = self.names.lock().unwrap().len();
         let gpu_procs = self.procs.values().filter(|p| !p.gpus.is_empty()).count();
-        json!({"tasks": tasks, "threads": threads, "kthreads": kthreads, "running": running, "containers": containers, "gpuProcs": gpu_procs})
+        // Focus breadcrumb: the focused process's ancestors, outermost first.
+        let focus = self.focus.and_then(|f| self.procs.get(&f)).map(|p| {
+            let mut chain = Vec::new();
+            let mut cur = self.procs.get(&p.ppid);
+            while let Some(a) = cur {
+                chain.push(json!({"pid": a.pid, "name": a.name}));
+                if a.ppid == a.pid || chain.len() > 64 {
+                    break;
+                }
+                cur = self.procs.get(&a.ppid);
+            }
+            chain.reverse();
+            json!({"pid": p.pid, "name": p.name, "chain": chain, "count": self.subtree(p.pid).len()})
+        });
+        json!({"tasks": tasks, "threads": threads, "kthreads": kthreads, "running": running, "containers": containers, "gpuProcs": gpu_procs, "focus": focus})
     }
 }

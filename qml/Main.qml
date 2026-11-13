@@ -102,6 +102,7 @@ ApplicationWindow {
         function onCpuCombinedChanged() { Qt.callLater(win.updatePlan) }
         function onCollapsedSectionsChanged() { Qt.callLater(win.updatePlan) }
     }
+    readonly property var focusInfo: snap.procs && snap.procs.focus ? snap.procs.focus : null
     function setGpuShown(pdev, show) {
         if (show) settings.hiddenGpus = hiddenGpus.filter(p => p !== pdev).join(",")
         else hideGpu(pdev)
@@ -277,7 +278,14 @@ ApplicationWindow {
     Shortcut { sequence: "F5"; onActivated: win.setView(win.view === "tree" ? "flat" : "tree") }
     Shortcut { sequence: "F10"; onActivated: win.hide() }
     Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-    Shortcut { sequence: "Escape"; onActivated: { if (filterField.text) { filterField.text = ""; table.forceActiveFocus() } else win.hide() } }
+    Shortcut {
+        sequence: "Escape"
+        onActivated: {
+            if (filterField.text) { filterField.text = ""; table.forceActiveFocus() }
+            else if (win.focusInfo) mon.set_focus(0)
+            else win.hide()
+        }
+    }
     // Single-letter htop keys only act while the process list has focus,
     // so typing in the filter box doesn't trigger them.
     function letterKey(t) {
@@ -824,9 +832,60 @@ ApplicationWindow {
             }
         }
 
+        // Focus mode bar: where the focused process sits, and the way out.
+        Rectangle {
+            visible: !!win.focusInfo
+            Layout.fillWidth: true
+            implicitHeight: focusRow.implicitHeight + 8
+            color: Qt.rgba(win.cCyan.r, win.cCyan.g, win.cCyan.b, 0.14)
+            RowLayout {
+                id: focusRow
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                spacing: 6
+                Text { text: "Focused on"; font: win.mono; color: win.dimColor }
+                // Breadcrumb: click an ancestor to widen the focus to it.
+                Repeater {
+                    model: win.focusInfo ? win.focusInfo.chain.length : 0
+                    Row {
+                        spacing: 6
+                        readonly property var a: win.focusInfo ? win.focusInfo.chain[index] : ({})
+                        Text {
+                            text: parent.a.name || ""
+                            font.family: win.mono.family
+                            font.pointSize: win.mono.pointSize
+                            font.underline: crumbHover.hovered
+                            color: crumbHover.hovered ? win.cCyan : win.dimColor
+                            HoverHandler { id: crumbHover; cursorShape: Qt.PointingHandCursor }
+                            TapHandler { onTapped: mon.set_focus(parent.parent.a.pid) }
+                            ToolTip.text: "Focus on PID " + parent.a.pid + " instead"
+                            ToolTip.visible: crumbHover.hovered
+                            ToolTip.delay: 500
+                        }
+                        Text { text: "▸"; font: win.mono; color: win.dimColor }
+                    }
+                }
+                Text {
+                    text: win.focusInfo ? win.focusInfo.name + "  (PID " + win.focusInfo.pid + ", " + win.focusInfo.count + " processes)" : ""
+                    font.family: win.mono.family
+                    font.pointSize: win.mono.pointSize
+                    font.bold: true
+                    color: win.textColor
+                }
+                Item { Layout.fillWidth: true }
+                ToolButton {
+                    text: "✕ Show everything (Esc)"
+                    font: win.mono
+                    onClicked: mon.set_focus(0)
+                }
+            }
+        }
+
         // The process table
         ProcessTable {
             id: table
+            focusPid: win.focusInfo ? win.focusInfo.pid : 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             monitor: mon
@@ -979,6 +1038,7 @@ ApplicationWindow {
                 + "Shift+← →     scroll sideways (Shift+wheel too)\n"
                 + "* / _         expand all / collapse all\n"
                 + "Enter         details\n"
+                + "f / double-click  show only this process tree (again or Esc: all)\n"
                 + "F9 / k        signal menu (right-click too)\n"
                 + "F7 / ]        nice − (higher priority)\n"
                 + "F8 / [        nice + (lower priority)\n"

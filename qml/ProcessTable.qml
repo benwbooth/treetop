@@ -24,6 +24,11 @@ FocusScope {
     property int currentPid: 0
     property var tagged: ({})
     property var letterHandler: null
+    // Focus mode: the PID whose tree is shown alone (0: everything).
+    property int focusPid: 0
+    function toggleFocus(pid) {
+        if (pid > 0) monitor.set_focus(focusPid === pid ? 0 : pid)
+    }
     property var hiddenColumns: []
     property bool shortenStorePaths: true
     readonly property bool frozen: listHover.hovered
@@ -788,8 +793,9 @@ FocusScope {
                         }
                     }
                     onDoubleClicked: (mouse) => {
+                        // Double-click: show only this process's tree (again: everything).
                         if (rowItem.hasChildren && rowItem.group) table.monitor.toggle(rowItem.key)
-                        else if (rowItem.pid > 0) table.showDetails(rowItem.pid)
+                        else table.toggleFocus(rowItem.pid)
                     }
                 }
             }
@@ -815,6 +821,8 @@ FocusScope {
                     table.monitor.set_expanded_all(true)
                 } else if (t === "_") {
                     table.monitor.set_expanded_all(false)
+                } else if (t === "f") {
+                    table.toggleFocus(table.currentPid)
                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                     if (table.currentPid > 0) table.showDetails(table.currentPid); else table.toggleCurrent()
                 } else if (event.key === Qt.Key_F9 || t === "k") {
@@ -896,7 +904,13 @@ FocusScope {
         MenuItem { text: "Nice +1 (lower priority)"; onTriggered: table.renice(1) }
         MenuItem { text: "Nice −1 (higher priority)"; onTriggered: table.renice(-1) }
         MenuSeparator {}
-        MenuItem { text: "Details…"; icon.name: "documentinfo"; enabled: table.currentPid > 0; onTriggered: table.showDetails(table.currentPid) }
+        MenuItem {
+            text: table.focusPid > 0 && table.focusPid === table.currentPid ? "Show all processes (f)" : "Focus on this process tree (f)"
+            icon.name: "zoom-select"
+            enabled: table.currentPid > 0
+            onTriggered: table.toggleFocus(table.currentPid)
+        }
+        MenuItem { text: "Details… (Enter)"; icon.name: "documentinfo"; enabled: table.currentPid > 0; onTriggered: table.showDetails(table.currentPid) }
         MenuItem { text: "Collapse / expand"; onTriggered: table.toggleCurrent() }
         MenuItem { text: "Expand all"; onTriggered: table.monitor.set_expanded_all(true) }
         MenuItem { text: "Collapse all"; onTriggered: table.monitor.set_expanded_all(false) }
