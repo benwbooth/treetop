@@ -83,7 +83,13 @@ ApplicationWindow {
             case "gpu": return snap.gpus.length === 0 ? 0 : 1 + (sectionOpen("gpu") ? 3 * gpus.length : 0)
             case "storage": return 1 + (sectionOpen("storage") ? fsCount : 0)
             case "system": return 1 + (sectionOpen("system") ? 3 : 0)
-            case "sensors": return (snap.sensors || []).length ? 1 + (sectionOpen("sensors") ? sensorGroups.length : 0) : 0
+            case "sensors": {
+                if (!(snap.sensors || []).length) return 0
+                if (!sectionOpen("sensors")) return 1
+                // Each device line, plus wrapped continuation lines.
+                const perLine = Math.max(10, Math.floor(colW / Math.max(1, mono.pointSize * 0.8)))
+                return 1 + sensorGroups.reduce((n, g) => n + Math.ceil((g.dev.length + g.items.reduce((m, x) => m + x.label.length + 7, 0)) / perLine), 0)
+            }
             }
             return 1
         }
@@ -913,7 +919,8 @@ ApplicationWindow {
                     Text {
                         readonly property var grp: win.sensorGroups[index] || ({ dev: "", items: [] })
                         Layout.fillWidth: true
-                        elide: Text.ElideRight
+                        // Wraps rather than cutting readings off.
+                        wrapMode: Text.WordWrap
                         font: win.mono
                         color: win.textColor
                         textFormat: Text.StyledText
