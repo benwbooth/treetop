@@ -140,8 +140,9 @@ PlasmoidItem {
     readonly property var palette: ({ cpu: "#43c96b", mem: "#d6b23e", gpu: "#c06fd8", vram: "#d070a8", disk: "#4fb3d9", net: "#4f8fe0" })
     function pct(v) { return (Number(v) || 0).toFixed(0) + "%" }
     // Label for an item per the "labels" setting: full name, one letter, or none.
-    function lbl(full, letter) { return (cfg.labels === "full" || cfg.labels === "vertical") ? full : (cfg.labels === "none" ? "" : letter) }
+    function lbl(full, letter) { return (cfg.labels === "full" || cfg.labels === "vertical" || cfg.labels === "stacked") ? full : (cfg.labels === "none" ? "" : letter) }
     readonly property bool vlabels: cfg.labels === "vertical"
+    readonly property bool slabels: cfg.labels === "stacked"
 
     // ---- open treetop ----------------------------------------------------
     P5Support.DataSource {
@@ -264,14 +265,14 @@ PlasmoidItem {
                 h: compact.h; label: root.lbl("CPU", "C"); color: root.palette.cpu
                 value: (Number(cpu.value) || 0).toFixed(0) + "%"
                 history: root.hCpu
-                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
+                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
             }
             KStat {
                 visible: root.cfg.showMemory
                 h: compact.h; label: root.lbl("MEM", "M"); color: root.palette.mem
                 value: (Number(mem.value) || 0).toFixed(0) + "%"
                 history: root.hMem
-                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
+                showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
             }
             Repeater {
                 model: root.gpuIndexes
@@ -286,7 +287,7 @@ PlasmoidItem {
                         color: root.palette.gpu
                         value: parent.g ? (Number(parent.g.usage.value) || 0).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.hist : []
-                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
+                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
                     }
                     // GPU memory: history of VRAM use, amount used inside.
                     KStat {
@@ -296,7 +297,7 @@ PlasmoidItem {
                         color: root.palette.vram
                         value: parent.g ? ((Number(parent.g.usedVram.value) || 0) / Math.max(1, Number(parent.g.vramTotal.value) || 0) * 100).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.vhist : []
-                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
+                        showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
                     }
                 }
             }
@@ -308,7 +309,7 @@ PlasmoidItem {
                 bar: !io
                 fill: (Number(diskUse.value) || 0) / 100
                 history: root.hDisk
-                showGraph: io && root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
+                showGraph: io && root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
             }
             // Network: arrows and two stacked rates, like KStats.
             RowLayout {
@@ -323,9 +324,13 @@ PlasmoidItem {
                         id: netLabel
                         anchors.centerIn: parent
                         rotation: root.vlabels ? -90 : 0
-                        text: root.lbl("NET", "N")
+                        text: root.slabels ? "N\nE\nT" : root.lbl("NET", "N")
+                        horizontalAlignment: Text.AlignHCenter
+                        lineHeightMode: root.slabels ? Text.FixedHeight : Text.ProportionalHeight
+                        lineHeight: root.slabels ? Math.floor(compact.h * 0.92 / 4) : 1
                         color: root.cfg.colorLabels ? root.palette.net : Kirigami.Theme.textColor
-                        font.pixelSize: root.vlabels ? Math.max(6, Math.round(compact.h * 0.2)) : Math.max(7, Math.round(compact.h * 0.22))
+                        font.pixelSize: root.slabels ? Math.max(5, Math.floor(compact.h * 0.92 / 4))
+                            : (root.vlabels ? Math.max(6, Math.round(compact.h * 0.2)) : Math.max(7, Math.round(compact.h * 0.22)))
                         font.bold: true
                         renderType: Text.NativeRendering
                     }

@@ -79,8 +79,8 @@ KCM.SimpleKCM {
         QQC2.CheckBox { id: valuesInside; text: i18n("Values inside the graphs (compact)") }
         QQC2.ComboBox {
             Kirigami.FormData.label: i18n("Labels:")
-            model: [i18n("Sideways (CPU written vertically)"), i18n("One letter (C, M, G…)"), i18n("Full (CPU, MEM…)"), i18n("None (colours only)")]
-            readonly property var keys: ["vertical", "short", "full", "none"]
+            model: [i18n("Sideways (CPU written vertically)"), i18n("Stacked (C over P over U, letters upright)"), i18n("One letter (C, M, G…)"), i18n("Full (CPU, MEM…)"), i18n("None (colours only)")]
+            readonly property var keys: ["vertical", "stacked", "short", "full", "none"]
             currentIndex: Math.max(0, keys.indexOf(cfg_labels))
             onActivated: cfg_labels = keys[currentIndex]
         }

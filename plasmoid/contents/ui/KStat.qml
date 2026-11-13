@@ -21,10 +21,26 @@ RowLayout {
     // Write the label sideways (bottom to top), so a full name takes the
     // width of one small letter.
     property bool verticalLabel: false
+    // Or stack the letters top to bottom, each one upright.
+    property bool stackedLabel: false
     readonly property bool inside: overlay && (showGraph || bar)
 
     spacing: Math.round(h * 0.06)
 
+    Text {
+        visible: stat.stackedLabel && stat.label.length > 0
+        Layout.alignment: Qt.AlignVCenter
+        text: stat.label.split("").join("\n")
+        horizontalAlignment: Text.AlignHCenter
+        // Fixed line height sized for four letters (VRAM, DISK), the same
+        // for every label so they look even.
+        lineHeightMode: Text.FixedHeight
+        lineHeight: Math.floor(stat.h * 0.92 / 4)
+        color: stat.colorLabel ? stat.color : Kirigami.Theme.textColor
+        font.pixelSize: Math.max(5, Math.floor(stat.h * 0.92 / 4))
+        font.bold: true
+        renderType: Text.NativeRendering
+    }
     Item {
         visible: stat.verticalLabel && stat.label.length > 0
         Layout.alignment: Qt.AlignVCenter
@@ -42,7 +58,7 @@ RowLayout {
         }
     }
     Text {
-        visible: !stat.verticalLabel && stat.label.length > 0
+        visible: !stat.verticalLabel && !stat.stackedLabel && stat.label.length > 0
         text: stat.label
         color: stat.colorLabel ? stat.color : Kirigami.Theme.textColor
         font.pixelSize: Math.max(7, Math.round(stat.h * 0.22))
