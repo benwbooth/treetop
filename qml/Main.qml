@@ -1138,17 +1138,17 @@ ApplicationWindow {
                 TabButton { text: "Environment" + (details.info.environ ? " (" + details.info.environ.length + ")" : "") }
                 TabButton { text: "Open files" + (details.info.files ? " (" + details.info.files.length + ")" : "") }
             }
-            StackLayout {
+            // Pages anchored to fill this area, shown by tab (StackLayout kept
+            // a page hidden at first layout at a stale small size).
+            Item {
+                id: tabPages
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: tabs.currentIndex
 
                 // ---- Overview
-                // (Each page fills the dialog explicitly: StackLayout left
-                // them at their small implicit size.)
                 ScrollView {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    anchors.fill: parent
+                    visible: tabs.currentIndex === 0
                     clip: true
                     GridLayout {
                         width: details.availableWidth - 20
@@ -1198,8 +1198,8 @@ ApplicationWindow {
 
                 // ---- Environment
                 ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    anchors.fill: parent
+                    visible: tabs.currentIndex === 1
                     spacing: 6
                     NeedsRoot { visible: !details.info.environ; what: "environment" }
                     TextField {
@@ -1241,8 +1241,8 @@ ApplicationWindow {
 
                 // ---- Open files
                 ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    anchors.fill: parent
+                    visible: tabs.currentIndex === 2
                     spacing: 6
                     NeedsRoot { visible: !details.info.files; what: "open files" }
                     ListView {
