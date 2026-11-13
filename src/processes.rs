@@ -14,7 +14,32 @@ struct Static {
     start: u64,
     uid: u32,
     cmd: String,
+    /// Full path of the executable ("" if unknown; "?"-suffixed if guessed).
+    exe: String,
     container: Option<(String, &'static str)>,
+}
+
+/// The executable's full path: /proc/<pid>/exe when readable (our own
+/// processes, or as root); otherwise argv[0] resolved through PATH, marked
+/// with a trailing "?" since it's a guess.
+fn resolve_exe(base: &std::path::Path, argv0: &str) -> String {
+    if let Ok(p) = fs::read_link(base.join("exe")) {
+        return p.display().to_string();
+    }
+    if argv0.is_empty() {
+        return String::new();
+    }
+    if argv0.starts_with('/') {
+        return argv0.to_string();
+    }
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .map(|d| std::path::Path::new(d).join(argv0))
+        .find(|p| p.is_file())
+        .and_then(|p| fs::canonicalize(p).ok())
+        .map(|p| format!("{}?", p.display()))
+        .unwrap_or_default()
 }
 
 #[derive(Clone)]
@@ -24,6 +49,7 @@ pub struct Proc {
     pub uid: u32,
     pub name: String,
     pub cmd: String,
+    pub exe: String,
     pub state: char,
     pub pri: i64,
     pub ni: i64,
@@ -147,7 +173,13 @@ impl Processes {
                     } else {
                         fs::read_to_string(base.join("cgroup")).ok().and_then(|c| containers::container_id(&c))
                     };
-                    let s = Static { start, uid, cmd, container };
+                    let exe = if kernel {
+                        String::new()
+                    } else {
+                        let argv0 = raw.split(|b| *b == 0).next().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
+                        resolve_exe(&base, &argv0)
+                    };
+                    let s = Static { start, uid, cmd, exe, container };
                     self.statics.insert(pid, s.clone());
                     s
                 }
@@ -182,6 +214,7 @@ impl Processes {
                     pid,
                     ppid,
                     uid: st.uid,
+                    exe: st.exe,
                     cmd: if st.cmd.is_empty() { format!("[{name}]") } else { st.cmd },
                     name,
                     state: f[0].chars().next().unwrap_or('?'),
@@ -336,7 +369,7 @@ impl Processes {
             "time": p.ticks as f64 / self.clk_tck, "threads": p.threads,
             "container": c.map(|c| c.name.clone()).or_else(|| p.container.as_ref().map(|id| id[..12].to_string())).unwrap_or_default(),
             "engine": p.engine, "image": c.map(|c| c.image.clone()).unwrap_or_default(),
-            "name": p.name, "command": p.cmd, "kernel": p.kernel, "count": 1,
+            "name": p.name, "command": p.cmd, "exe": p.exe, "kernel": p.kernel, "count": 1,
             "containerRoot": container_root,
             "gpu": p.gpu, "vram": p.vram as f64, "gtt": p.gtt as f64, "gpus": p.gpus,
             "gpuEngines": p.gpu_engines.iter().map(|v| format!("{v:.0}")).collect::<Vec<_>>().join("/"),
@@ -485,7 +518,7 @@ impl Processes {
                         "container": title, "engine": engine.unwrap_or_default(),
                         "image": c.map(|c| c.image.clone()).unwrap_or_default(),
                         "name": title, "command": c.map(|c| format!("{}  ·  {}", c.image, c.status)).unwrap_or_else(|| "processes outside any container".into()),
-                        "kernel": false, "count": members.len(),
+                        "kernel": false, "count": members.len(), "exe": "",
                         "containerRoot": false,
                         "gpu": members.iter().map(|p| self.procs[p].gpu).fold(0.0, f64::max),
                         "vram": members.iter().map(|p| self.procs[p].vram).sum::<u64>() as f64,

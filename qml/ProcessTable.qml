@@ -178,11 +178,18 @@ FocusScope {
     // The tooltip version: program on the first line, then one argument per
     // indented line, keeping "--flag value" pairs together.
     // (Unshortened: the tooltip shows the full /nix/store paths.)
-    function prettyCommand(command) {
+    function prettyCommand(command, exe) {
         const toks = command.split(/ +/).filter(t => t.length)
         if (toks.length === 0) return ""
-        const prog = toks[0], slash = prog.lastIndexOf("/")
-        const lines = [span(syn.dir, prog.slice(0, slash + 1)) + span(syn.prog, prog.slice(slash + 1), true)]
+        // First line: the executable's full path (from /proc/<pid>/exe), with
+        // the name it was run as when that differs.
+        const guessed = exe.endsWith("?")
+        const path = guessed ? exe.slice(0, -1) : exe
+        const prog = path || toks[0], slash = prog.lastIndexOf("/")
+        let first = span(syn.dir, prog.slice(0, slash + 1)) + span(syn.prog, prog.slice(slash + 1), true)
+        if (guessed) first += span(syn.dir, "  (? found on PATH; the real binary isn't readable without root)")
+        if (path && toks[0] !== path) first += span(syn.dir, "  as " + toks[0])
+        const lines = [first]
         const indent = "&nbsp;&nbsp;&nbsp;&nbsp;"
         for (let i = 1; i < toks.length; i++) {
             const t = toks[i], next = toks[i + 1]
@@ -529,6 +536,7 @@ FocusScope {
                 required property string engine
                 required property string name
                 required property string command
+                required property string exe
                 required property bool kernel
                 required property int count
                 required property bool containerRoot
@@ -689,7 +697,7 @@ FocusScope {
                                     font: table.font
                                     color: table.textColor
                                     wrapMode: Text.WrapAnywhere
-                                    text: table.prettyCommand(rowItem.command)
+                                    text: table.prettyCommand(rowItem.command, rowItem.exe)
                                         + "<br><br><font color='" + table.dimColor + "'>PID " + rowItem.pid + " · " + Fmt.escape(rowItem.user)
                                         + (rowItem.container ? " · ⬢ " + Fmt.escape(rowItem.container) : "") + "</font>"
                                 }
