@@ -880,7 +880,21 @@ ApplicationWindow {
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
                 spacing: 6
-                Text { text: "Focused on"; font: win.mono; color: win.dimColor }
+                // Root of the breadcrumb: click to show everything again.
+                Text {
+                    text: "⌂ All"
+                    font.family: win.mono.family
+                    font.pointSize: win.mono.pointSize
+                    font.bold: true
+                    font.underline: allHover.hovered
+                    color: allHover.hovered ? win.cCyan : win.textColor
+                    HoverHandler { id: allHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: mon.set_focus(0) }
+                    ToolTip.text: "Show all processes again (Esc)"
+                    ToolTip.visible: allHover.hovered
+                    ToolTip.delay: 500
+                }
+                Text { text: "▸"; font: win.mono; color: win.dimColor }
                 // Breadcrumb: click an ancestor to widen the focus to it.
                 Repeater {
                     model: win.focusInfo ? win.focusInfo.chain.length : 0
