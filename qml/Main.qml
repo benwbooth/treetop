@@ -169,6 +169,7 @@ ApplicationWindow {
         property real scrollY: 0
         property real scrollX: 0
         property bool rootMode: false
+        property string columnWidths: "{}"
     }
 
     Monitor {
@@ -998,6 +999,8 @@ ApplicationWindow {
             showContainerColumn: win.view !== "containers" && (win.snap.procs.containers || 0) > 0
             onNotice: (text) => win.showStatus(text)
             onShowDetails: (pid) => details.openFor(pid)
+            widthOverride: { try { return JSON.parse(settings.columnWidths) } catch (e) { return ({}) } }
+            onWidthOverrideChanged: settings.columnWidths = JSON.stringify(widthOverride)
             onSortKeyChanged: settings.sortKey = sortKey
             onSortDescChanged: settings.sortDesc = sortDesc
             onCurrentKeyChanged: if (restored) { settings.selectedKey = currentKey; viewSave.restart() }

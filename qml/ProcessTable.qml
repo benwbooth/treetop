@@ -96,7 +96,11 @@ FocusScope {
     ]
     property bool showContainerColumn: true
     readonly property var forcedColumns: view === "gpu" ? ["gpu", "vram", "gpus", "engines"] : []
-    readonly property var visibleColumns: columns.filter(c =>
+    // Column widths you set (key -> characters), applied over the defaults.
+    property var widthOverride: ({})
+    readonly property var columnsEff: columns.map(c => c.chars > 0 && widthOverride[c.key]
+        ? Object.assign({}, c, { chars: widthOverride[c.key] }) : c)
+    readonly property var visibleColumns: columnsEff.filter(c =>
         c.key === "command" || forcedColumns.indexOf(c.key) >= 0
         || ((!c.optional || showContainerColumn) && hiddenColumns.indexOf(c.key) < 0))
 
@@ -140,6 +144,67 @@ FocusScope {
         for (const c of fixedColumns) { m[c.key] = { at: n, chars: c.chars }; n += c.chars + 1 }
         return m
     }
+    // A fixed column's text for a row (the delegate, or a ListModel row).
+    function cellFor(r, k) {
+        const group = r.group, pid = r.pid, user = r.user, pri = r.pri, ni = r.ni, virt = r.virt, res = r.res, shr = r.shr
+        const state = r.state, cpu = r.cpu, mem = r.mem, gpus = r.gpus, gpu = r.gpu, vram = r.vram, gpuEngines = r.gpuEngines
+        const ioR = r.ioR, ioW = r.ioW, netRx = r.netRx, netTx = r.netTx, count = r.count, time = r.time, container = r.container
+        switch (k) {
+        case "pid": return group ? "" : String(pid)
+        case "user": return user
+        case "pri": return group ? "" : (pri <= -100 ? "RT" : String(pri))
+        case "ni": return group ? "" : String(ni)
+        case "virt": return group ? "" : Fmt.bytes(virt)
+        case "res": return Fmt.bytes(res)
+        case "shr": return group ? "" : Fmt.bytes(shr)
+        case "state": return state
+        // Blank instead of 0.0, so active processes stand out.
+        case "cpu": return cpu >= 0.05 ? cpu.toFixed(1) : ""
+        case "mem": return mem >= 0.05 ? mem.toFixed(1) : ""
+        case "gpu": return gpus.length > 0 || gpu > 0 ? gpu.toFixed(1) : ""
+        case "vram": return vram > 0 ? Fmt.bytes(vram) : ""
+        case "gpus": return gpus
+        case "engines": return gpuEngines
+        case "ior": return ioR > 0 ? Fmt.bytes(ioR) : (ioR < 0 ? "" : "0")
+        case "iow": return ioW > 0 ? Fmt.bytes(ioW) : (ioW < 0 ? "" : "0")
+        case "net": return netRx < 0 ? "" : Fmt.bytes(netRx) + "/" + Fmt.bytes(netTx)
+        case "time": return group ? count + (count === 1 ? " proc" : " procs") : Fmt.cpuTime(time)
+        case "container": return group ? "" : container
+        }
+        return ""
+    }
+
+    // The fixed column under a row x position (content coordinates).
+    function colAt(x) {
+        const idx = Math.floor((x - 4) / cw)
+        for (const c of fixedColumns) {
+            const st = columnStart[c.key]
+            if (st && idx >= st.at && idx < st.at + c.chars + 1) return c
+        }
+        return null
+    }
+
+    // Auto-fit: every fixed column as wide as its widest value or title.
+    function autoFitColumns() {
+        const w = {}
+        for (const c of fixedColumns) w[c.key] = c.title.length + 1
+        for (let i = 0; i < rows.count; i++) {
+            const r = rows.get(i)
+            for (const c of fixedColumns) {
+                const n = String(cellFor(r, c.key)).length
+                if (n > w[c.key]) w[c.key] = n
+            }
+        }
+        const o = Object.assign({}, widthOverride)
+        for (const k in w) o[k] = Math.max(2, Math.min(60, w[k]))
+        widthOverride = o
+    }
+    function setColumnChars(key, chars) {
+        const o = Object.assign({}, widthOverride)
+        o[key] = Math.max(2, Math.min(80, Math.round(chars)))
+        widthOverride = o
+    }
+
     // Heat colour for a 0..1 load: green, then yellow, then red.
     function heat(f) {
         f = Math.max(0, Math.min(1, f))
@@ -429,6 +494,41 @@ FocusScope {
                     color: Qt.rgba(0, 0, 0, 0.25)
                 }
             }
+            // Column gaps: drag to resize the column on the left; double-click
+            // to auto-fit every column.
+            Repeater {
+                model: table.dividerXs.length
+                MouseArea {
+                    z: 3
+                    readonly property var col: table.fixedColumns[index]
+                    x: table.dividerXs[index] - list.contentX - 5
+                    width: 10
+                    height: parent.height
+                    cursorShape: Qt.SplitHCursor
+                    hoverEnabled: true
+                    preventStealing: true
+                    onPositionChanged: (m) => {
+                        if (!pressed || !col) return
+                        const start = table.columnStart[col.key]
+                        if (!start) return
+                        // Pointer x in content coordinates, relative to the column's start.
+                        const px = x + m.x + list.contentX - (4 + start.at * table.cw)
+                        table.setColumnChars(col.key, px / table.cw - 0.5)
+                    }
+                    onDoubleClicked: table.autoFitColumns()
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: 2
+                        height: parent.height - 4
+                        radius: 1
+                        visible: parent.containsMouse || parent.pressed
+                        color: "#0d1a12"
+                    }
+                    ToolTip.visible: containsMouse && !pressed
+                    ToolTip.delay: 800
+                    ToolTip.text: "Drag to resize · double-click to fit all columns"
+                }
+            }
             Row {
                 x: -list.contentX
                 anchors.verticalCenter: parent.verticalCenter
@@ -704,31 +804,7 @@ FocusScope {
                      : (container.length > 0 ? Qt.tint(index % 2 ? table.altColor : table.baseColor, Qt.rgba(chip.r, chip.g, chip.b, 0.06))
                      : (index % 2 ? table.altColor : table.baseColor)))
 
-                function cell(k) {
-                    switch (k) {
-                    case "pid": return group ? "" : String(pid)
-                    case "user": return user
-                    case "pri": return group ? "" : (pri <= -100 ? "RT" : String(pri))
-                    case "ni": return group ? "" : String(ni)
-                    case "virt": return group ? "" : Fmt.bytes(virt)
-                    case "res": return Fmt.bytes(res)
-                    case "shr": return group ? "" : Fmt.bytes(shr)
-                    case "state": return state
-                    // Blank instead of 0.0, so active processes stand out.
-                    case "cpu": return cpu >= 0.05 ? cpu.toFixed(1) : ""
-                    case "mem": return mem >= 0.05 ? mem.toFixed(1) : ""
-                    case "gpu": return gpus.length > 0 || gpu > 0 ? gpu.toFixed(1) : ""
-                    case "vram": return vram > 0 ? Fmt.bytes(vram) : ""
-                    case "gpus": return gpus
-                    case "engines": return gpuEngines
-                    case "ior": return ioR > 0 ? Fmt.bytes(ioR) : (ioR < 0 ? "" : "0")
-                    case "iow": return ioW > 0 ? Fmt.bytes(ioW) : (ioW < 0 ? "" : "0")
-                    case "net": return netRx < 0 ? "" : Fmt.bytes(netRx) + "/" + Fmt.bytes(netTx)
-                    case "time": return group ? count + (count === 1 ? " proc" : " procs") : Fmt.cpuTime(time)
-                    case "container": return group ? "" : container
-                    }
-                    return ""
-                }
+                function cell(k) { return table.cellFor(rowItem, k) }
                 function cellColor(k) {
                     if (current) return table.highlightTextColor
                     if (aggCount > 0 && (k === "cpu" || k === "mem" || k === "res" || k === "gpu" || k === "vram" || k === "ior" || k === "iow" || k === "net")) return "#56b6e0"
@@ -782,12 +858,28 @@ FocusScope {
                     }
                 }
                 Text {
+                    id: fixedText
                     x: 4
                     width: table.fixedWidth
                     height: parent.height
                     verticalAlignment: Text.AlignVCenter
                     textFormat: Text.StyledText
                     text: rowItem.fixedHtml()
+                    // A cell cut off with … shows its full text on hover.
+                    HoverHandler { id: cellHover }
+                    readonly property var hoverCol: cellHover.hovered ? table.colAt(cellHover.point.position.x + 4) : null
+                    readonly property string hoverFull: hoverCol ? String(rowItem.cell(hoverCol.key)) : ""
+                    Loader {
+                        active: fixedText.hoverCol !== null && fixedText.hoverFull.length > fixedText.hoverCol.chars
+                        sourceComponent: ToolTip {
+                            visible: true
+                            delay: 400
+                            x: cellHover.point.position.x + 12
+                            y: rowItem.height + 2
+                            text: fixedText.hoverCol ? fixedText.hoverCol.title + ": " + fixedText.hoverFull : ""
+                            font: table.font
+                        }
+                    }
                     font: table.font
                     color: rowItem.fg
                     clip: true
