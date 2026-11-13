@@ -1144,7 +1144,11 @@ ApplicationWindow {
                 currentIndex: tabs.currentIndex
 
                 // ---- Overview
+                // (Each page fills the dialog explicitly: StackLayout left
+                // them at their small implicit size.)
                 ScrollView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                     clip: true
                     GridLayout {
                         width: details.availableWidth - 20
@@ -1194,6 +1198,8 @@ ApplicationWindow {
 
                 // ---- Environment
                 ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                     spacing: 6
                     NeedsRoot { visible: !details.info.environ; what: "environment" }
                     TextField {
@@ -1213,7 +1219,7 @@ ApplicationWindow {
                         ScrollBar.vertical: ScrollBar {}
                         delegate: TextEdit {
                             required property var modelData
-                            width: ListView.view.width - 14
+                            width: ListView.view ? ListView.view.width - 14 : 400
                             readOnly: true
                             selectByMouse: true
                             wrapMode: TextEdit.WrapAnywhere
@@ -1235,6 +1241,8 @@ ApplicationWindow {
 
                 // ---- Open files
                 ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                     spacing: 6
                     NeedsRoot { visible: !details.info.files; what: "open files" }
                     ListView {
