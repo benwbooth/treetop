@@ -40,6 +40,10 @@ FocusScope {
     }
     property var hiddenColumns: []
     property bool shortenStorePaths: true
+    // How /nix/store paths read in rows: "full", "hash" (/nix/store/abcde…-)
+    // or "compact" (/n…/s…/abcde…-).
+    property string storeStyle: "compact"
+    onStoreStyleChanged: { maxLineChars = 0; clearSynCache() }
     readonly property bool frozen: listHover.hovered
     signal notice(string text)
     signal showDetails(int pid)
@@ -115,7 +119,8 @@ FocusScope {
     // but different builds of the same package stay distinguishable.
     readonly property var storeHash: /\/nix\/store\/([0-9a-df-np-sv-z]{5})[0-9a-df-np-sv-z]{27}-/g
     function tidy(s) {
-        return shortenStorePaths ? s.replace(storeHash, "/nix/store/$1…-") : s
+        if (!shortenStorePaths || storeStyle === "full") return s
+        return s.replace(storeHash, storeStyle === "compact" ? "/n…/s…/$1…-" : "/nix/store/$1…-")
     }
 
     function colWidth(c) {
@@ -1027,11 +1032,11 @@ FocusScope {
             }
         }
         MenuSeparator {}
-        MenuItem {
-            text: "Shorten /nix/store hashes"
-            checkable: true
-            checked: table.shortenStorePaths
-            onTriggered: table.shortenStorePaths = !table.shortenStorePaths
+        Menu {
+            title: "/nix/store paths"
+            MenuItem { text: "Full"; checkable: true; checked: !table.shortenStorePaths || table.storeStyle === "full"; onTriggered: { table.shortenStorePaths = true; table.storeStyle = "full" } }
+            MenuItem { text: "Short hash  (/nix/store/abcde…-)"; checkable: true; checked: table.shortenStorePaths && table.storeStyle === "hash"; onTriggered: { table.shortenStorePaths = true; table.storeStyle = "hash" } }
+            MenuItem { text: "Compact  (/n…/s…/abcde…-)"; checkable: true; checked: table.shortenStorePaths && table.storeStyle === "compact"; onTriggered: { table.shortenStorePaths = true; table.storeStyle = "compact" } }
         }
         MenuItem { text: "Show all columns"; onTriggered: table.hiddenColumns = [] }
     }

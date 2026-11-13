@@ -151,6 +151,7 @@ ApplicationWindow {
         property string hiddenColumns: "pri,ni,shr,gpus,engines,container,time"
         property int columnsVersion: 0
         property bool shortenStorePaths: true
+        property string storeStyle: "compact"
         property bool showResources: true
         property bool cpuCombined: false
         property string hiddenGpus: ""
@@ -1026,6 +1027,8 @@ ApplicationWindow {
             onHiddenColumnsChanged: settings.hiddenColumns = hiddenColumns.join(",")
             shortenStorePaths: settings.shortenStorePaths
             onShortenStorePathsChanged: settings.shortenStorePaths = shortenStorePaths
+            storeStyle: settings.storeStyle
+            onStoreStyleChanged: settings.storeStyle = storeStyle
         }
 
         // htop's function-key bar
