@@ -887,10 +887,14 @@ FocusScope {
                         Text {
                             id: treeLines
                             // htop's tree lines; container groups indent one level first.
+                            // Box-drawing glyphs fill one text line, and a row is a
+                            // little taller, which left gaps between rows: stretch
+                            // just these to the full row height so they connect.
                             text: (rowItem.depth > 0 && table.view === "containers" && rowItem.prefix === "" ? "  " : "") + rowItem.prefix
                             font: table.font
                             color: rowItem.current ? table.highlightTextColor : table.dimColor
-                            anchors.verticalCenter: parent.verticalCenter
+                            y: 0
+                            transform: Scale { yScale: treeLines.implicitHeight > 0 ? rowItem.height / treeLines.implicitHeight : 1 }
                         }
                         Text {
                             id: arrow
