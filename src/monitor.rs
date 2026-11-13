@@ -207,7 +207,15 @@ impl cxx_qt::Initialize for qobject::Monitor {
                             .unwrap_or_default();
                         s.procs.sample(s.system.interval, s.system.mem_total);
                         let mut out = s.system.snapshot.clone();
+                        let mut unattributed: f64 = 0.0;
                         for (i, e) in s.procs.gpu_engine_totals().into_iter().enumerate() {
+                            // Busy the hardware reports that no process's
+                            // engine time explains (ROCm compute, a stuck
+                            // queue, or other users' work without root).
+                            let busy = out["gpus"][i]["busy"].as_f64().unwrap_or(0.0);
+                            let un = (busy - e.iter().cloned().fold(0.0, f64::max)).max(0.0);
+                            out["gpus"][i]["unattributed"] = json!(un);
+                            unattributed = unattributed.max(un);
                             out["gpus"][i]["engines"] = json!(e);
                         }
                         // liquidctl fans/pumps/liquid temps: the root helper's
@@ -222,6 +230,7 @@ impl cxx_qt::Initialize for qobject::Monitor {
                         }
                         out["procs"] = s.procs.summary();
                         out["top"] = s.procs.top();
+                        out["top"]["gpuUnattributed"] = json!(unattributed);
                         let mut notices = actions.drain();
                         if let Some(f) = s.procs.focus {
                             if !s.procs.procs.contains_key(&f) {

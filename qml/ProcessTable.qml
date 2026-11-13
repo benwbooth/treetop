@@ -53,6 +53,16 @@ FocusScope {
     }
     property var hiddenColumns: []
     property bool shortenStorePaths: true
+    // Resource columns lightly tinted in their graph colour (CPU green,
+    // memory yellow, GPU purple, VRAM pink, disk/network blue).
+    property bool tintColumns: true
+    readonly property var tintColors: ({
+        cpu: "#43c96b", time: "#43c96b",
+        mem: "#d6b23e", res: "#d6b23e", virt: "#d6b23e", shr: "#d6b23e",
+        gpu: "#c06fd8", vram: "#d070a8",
+        ior: "#4fb3d9", iow: "#4fb3d9", net: "#4f8fe0"
+    })
+    readonly property var tintKeys: tintColumns ? fixedColumns.map(c => c.key).filter(k => tintColors[k] !== undefined) : []
     // How /nix/store paths read in rows: "full", "hash" (/nix/store/abcde…-)
     // or "compact" (/n…/s…/abcde…-).
     property string storeStyle: "compact"
@@ -91,13 +101,13 @@ FocusScope {
         { key: "mem", title: "MEM%", chars: 6, right: true,
           tip: "Resident memory (RES) as a percentage of total physical RAM." },
         { key: "gpu", title: "GPU%", chars: 6, right: true,
-          tip: "How busy this process keeps the GPU: the busiest of its GPU engines (graphics, compute, copy, video decode/encode) over the last update, from the kernel's DRM fdinfo — the same source amdgpu_top and nvtop use. Only processes you own are visible without root." },
+          tip: "How busy this process keeps the GPU: the busiest of its GPU engines (graphics, compute, copy, video decode/encode) over the last update, from the kernel's DRM fdinfo — the same source amdgpu_top and nvtop use. Only processes you own are visible without root. ROCm compute work bypasses fdinfo, so for those processes it's the share of compute units their work occupies right now." },
         { key: "vram", title: "GMEM", chars: 7, right: true,
           tip: "Video memory (VRAM) this process has allocated on the GPU, as reported by the driver. Buffers it merely imported from other processes are not counted." },
         { key: "gpus", title: "GPU#", chars: 5,
           tip: "Which GPU(s) the process has open, numbered as in the GPU cards above (GPU1, GPU2, ...)." },
         { key: "engines", title: "GFX/CMP/DMA/DEC/ENC", chars: 20,
-          tip: "Per-engine GPU usage in %: GFX (3D/graphics), CMP (compute: ML, OpenCL, ROCm), DMA (copy engine), DEC (video decode), ENC (video encode)." },
+          tip: "Per-engine GPU usage in %: GFX (3D/graphics), CMP (compute: ML, OpenCL, ROCm), DMA (copy engine), DEC (video decode), ENC (video encode). \"ROCm\" marks a process holding ROCm compute queues (Ollama, PyTorch, …): its compute work isn't timed by the kernel, so CMP shows the compute units it occupies at this instant." },
         { key: "ior", title: "DISK R", chars: 8, right: true,
           tip: "Disk reads per second by this process, as the storage layer counts them (data actually fetched from disk, not page-cache hits). Blank for other users' processes: the kernel only shows their I/O counters to root." },
         { key: "iow", title: "DISK W", chars: 8, right: true,
@@ -820,6 +830,20 @@ FocusScope {
                     return out.replace(/ /g, "&nbsp;")
                 }
 
+                Repeater {
+                    model: table.tintKeys
+                    Rectangle {
+                        required property string modelData
+                        readonly property var col: table.columnStart[modelData]
+                        visible: col !== undefined && !rowItem.current
+                        x: col ? 4 + (col.at - 0.4) * table.cw : 0
+                        width: col ? (col.chars + 0.8) * table.cw : 0
+                        height: rowItem.height
+                        color: table.tintColors[modelData]
+                        // Blue barely shows on a dark base; give it more.
+                        opacity: modelData === "ior" || modelData === "iow" || modelData === "net" ? 0.14 : 0.08
+                    }
+                }
                 // Usage bars behind CPU% / MEM% / GPU%, coloured by load, so
                 // busy processes stand out at a glance.
                 Repeater {

@@ -137,7 +137,7 @@ PlasmoidItem {
         return (bytes < 10 && i > 0 ? bytes.toFixed(1) : bytes.toFixed(0)) + u[i]
     }
     // Same palette as the treetop app and the tray bars.
-    readonly property var palette: ({ cpu: "#43c96b", mem: "#d6b23e", gpu: "#c06fd8", vram: "#d070a8", disk: "#4fb3d9", net: "#4f8fe0", temp: "#e0894f" })
+    readonly property var palette: ({ cpu: "#43c96b", mem: "#d6b23e", gpu: "#c06fd8", vram: "#d070a8", disk: "#4fb3d9", net: "#4f8fe0", temp: "#e0894f", warn: "#e05a4f" })
     // CPU and main-GPU temperatures (°C), and a heat colour for them:
     // green up to 60°, yellow to 80°, red above.
     readonly property real cpuTempC: Number(cpuTemp.value) || 0
@@ -225,7 +225,8 @@ PlasmoidItem {
         if (kind === "temp") return sensorsText()
         if (!topData || !topData[kind]) return c(Kirigami.Theme.disabledTextColor, "Open treetop to see which programs are using this.")
         const list = topData[kind]
-        if (!list.length) return c(Kirigami.Theme.disabledTextColor, "Nothing is using it right now.")
+        const extra = kind === "gpu" ? gpuUnattributedText() : ""
+        if (!list.length) return extra || c(Kirigami.Theme.disabledTextColor, "Nothing is using it right now.")
         let t = "<table cellspacing='1'>"
         for (const x of list)
             t += "<tr><td align='right'>" + c(kindColor[kind], "<b>" + fmtTop(kind, x.v) + "</b>") + "</td><td>&nbsp;&nbsp;" + esc(x.name)
@@ -233,6 +234,24 @@ PlasmoidItem {
         t += "</table>"
         if (kind === "net" || kind === "disk")
             t += c(Kirigami.Theme.disabledTextColor, "<br>Other users' processes need root access in treetop.")
+        return t + (extra ? "<br>" + extra : "")
+    }
+    // When the GPU is busier than its programs add up to, say so, and name
+    // the programs holding ROCm compute queues (work fdinfo can't see).
+    function gpuUnattributedText() {
+        const un = topData.gpuUnattributed || 0
+        if (un < 20) return ""
+        let t = c(palette.warn, "<b>" + un.toFixed(0) + "%</b> busy isn't from any program listed.")
+        const holders = topData.gpuCompute || []
+        if (holders.length) {
+            t += "<br>" + c(Kirigami.Theme.disabledTextColor, "Holding ROCm compute queues (not measured per program):") + "<table cellspacing='1'>"
+            for (const x of holders)
+                t += "<tr><td align='right'>" + c(palette.vram, "<b>" + fmtRate(x.v) + "</b>") + "</td><td>&nbsp;&nbsp;" + esc(x.name)
+                    + "</td><td>&nbsp;" + c(Kirigami.Theme.disabledTextColor, x.n > 1 ? "×" + x.n : "") + "</td></tr>"
+            t += "</table>"
+        } else {
+            t += "<br>" + c(Kirigami.Theme.disabledTextColor, "Other users' work (turn on root in treetop) or a stuck GPU job.")
+        }
         return t
     }
 

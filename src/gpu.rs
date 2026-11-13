@@ -101,6 +101,71 @@ fn read_clients(pid: i32) -> Option<HashMap<(String, u64), Client>> {
     Some(out)
 }
 
+/// A process's ROCm/HSA compute use on one GPU, from amdkfd. Compute
+/// queues are user-mode queues the kernel never schedules, so their work
+/// never shows up in DRM fdinfo; /sys/class/kfd exposes (to everyone) each
+/// process's VRAM, queues, and how many compute units its waves occupy.
+#[derive(Clone, Default, Debug)]
+pub struct Compute {
+    pub pdev: String,
+    pub vram: u64,
+    pub queues: u32,
+    /// Share of the GPU's compute units occupied right now, in %.
+    pub cu_pct: f64,
+}
+
+const KFD: &str = "/sys/class/kfd/kfd";
+
+/// gpu_id -> (PCI address, compute units), from the KFD topology.
+fn kfd_gpus() -> &'static HashMap<String, (String, f64)> {
+    static GPUS: std::sync::OnceLock<HashMap<String, (String, f64)>> = std::sync::OnceLock::new();
+    GPUS.get_or_init(|| {
+        let mut out = HashMap::new();
+        for n in fs::read_dir(format!("{KFD}/topology/nodes")).into_iter().flatten().flatten() {
+            let id = fs::read_to_string(n.path().join("gpu_id")).unwrap_or_default().trim().to_string();
+            if id.is_empty() || id == "0" {
+                continue; // a CPU node
+            }
+            let props = fs::read_to_string(n.path().join("properties")).unwrap_or_default();
+            let prop = |k: &str| props.lines().find_map(|l| l.strip_prefix(k)?.strip_prefix(' ')?.trim().parse::<u64>().ok()).unwrap_or(0);
+            let loc = prop("location_id");
+            let pdev = format!("{:04x}:{:02x}:{:02x}.{:x}", prop("domain"), loc >> 8, (loc >> 3) & 0x1f, loc & 7);
+            let cus = prop("simd_count") as f64 / prop("simd_per_cu").max(1) as f64;
+            out.insert(id, (pdev, cus));
+        }
+        out
+    })
+}
+
+/// Every process holding ROCm compute state, per GPU.
+pub fn kfd() -> HashMap<i32, Vec<Compute>> {
+    let mut out = HashMap::new();
+    let gpus = kfd_gpus();
+    for e in fs::read_dir(format!("{KFD}/proc")).into_iter().flatten().flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else { continue };
+        let dir = e.path();
+        let mut queues: HashMap<String, u32> = HashMap::new();
+        for q in fs::read_dir(dir.join("queues")).into_iter().flatten().flatten() {
+            let id = fs::read_to_string(q.path().join("gpuid")).unwrap_or_default().trim().to_string();
+            *queues.entry(id).or_default() += 1;
+        }
+        let mut uses = Vec::new();
+        for (id, (pdev, cus)) in gpus {
+            let vram = fs::read_to_string(dir.join(format!("vram_{id}"))).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+            let q = queues.get(id).copied().unwrap_or(0);
+            if vram == 0 && q == 0 {
+                continue;
+            }
+            let occ = fs::read_to_string(dir.join(format!("stats_{id}/cu_occupancy"))).ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(0.0);
+            uses.push(Compute { pdev: pdev.clone(), vram, queues: q, cu_pct: if *cus > 0.0 { (occ / cus * 100.0).min(100.0) } else { 0.0 } });
+        }
+        if !uses.is_empty() {
+            out.insert(pid, uses);
+        }
+    }
+    out
+}
+
 pub fn spawn_poller() -> Shared {
     let shared: Shared = Arc::new(Mutex::new(HashMap::new()));
     let out = shared.clone();

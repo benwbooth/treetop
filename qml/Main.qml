@@ -169,6 +169,7 @@ ApplicationWindow {
         property string hiddenColumns: "pri,ni,shr,gpus,engines,container,time"
         property int columnsVersion: 0
         property bool shortenStorePaths: true
+        property bool tintColumns: true
         property string storeStyle: "compact"
         property bool showResources: true
         property bool cpuCombined: false
@@ -496,6 +497,7 @@ ApplicationWindow {
                         MenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
                         MenuItem { text: "Meters"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
                         MenuItem { text: "Combine CPU cores (1)"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
+                        MenuItem { text: "Tint resource columns"; checkable: true; checked: settings.tintColumns; onTriggered: settings.tintColumns = !settings.tintColumns }
                         MenuSeparator {}
                         MenuItem { text: "Keys… (h)"; icon.name: "help-contents"; onTriggered: helpDialog.open() }
                         MenuItem { text: "Quit"; icon.name: "application-exit"; onTriggered: Qt.quit() }
@@ -1085,6 +1087,7 @@ ApplicationWindow {
             hiddenColumns: settings.hiddenColumns.split(",").filter(x => x.length > 0)
             onHiddenColumnsChanged: settings.hiddenColumns = hiddenColumns.join(",")
             shortenStorePaths: settings.shortenStorePaths
+            tintColumns: settings.tintColumns
             onShortenStorePathsChanged: settings.shortenStorePaths = shortenStorePaths
             storeStyle: settings.storeStyle
             onStoreStyleChanged: settings.storeStyle = storeStyle

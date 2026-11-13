@@ -71,6 +71,8 @@ pub struct Proc {
     pub gtt: u64,
     pub gpu_engines: [f64; 5],
     pub gpus: String,
+    /// ROCm compute queues held (amdkfd), whose work fdinfo can't see.
+    pub compute_queues: u32,
     /// Disk read/write in bytes/s from /proc/<pid>/io; -1 when unreadable
     /// (other users' processes without root).
     pub io_r: f64,
@@ -91,6 +93,9 @@ pub struct Processes {
     prev_io: HashMap<i32, (u64, u64)>,
     /// Container network: previous (rx, tx) per container and the current rates.
     prev_cnet: HashMap<String, (u64, u64)>,
+    /// ROCm compute per process (amdkfd), this tick.
+    pub kfd: HashMap<i32, Vec<gpu::Compute>>,
+    gpu_uses_cached: HashMap<i32, Vec<gpu::GpuUse>>,
     pub cnet: HashMap<String, (f64, f64)>,
     users: HashMap<u32, String>,
     clk_tck: f64,
@@ -129,6 +134,11 @@ pub fn display_name(p: &Proc) -> String {
     let clean = |t: &str| -> String {
         let base = t.rsplit('/').next().unwrap_or(t);
         let base = base.strip_prefix('.').unwrap_or(base);
+        // A script copied into the Nix store: "<32-char hash>-name.py".
+        let base = match base.split_once('-') {
+            Some((h, rest)) if h.len() == 32 && h.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()) => rest,
+            _ => base,
+        };
         base.strip_suffix("-wrapped").unwrap_or(base).to_string()
     };
     let mut args = p.cmd.split_whitespace();
@@ -190,6 +200,8 @@ impl Processes {
             prev_ticks: HashMap::new(),
             prev_io: HashMap::new(),
             prev_cnet: HashMap::new(),
+            kfd: HashMap::new(),
+            gpu_uses_cached: HashMap::new(),
             cnet: HashMap::new(),
             users: load_users(),
             clk_tck: unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64,
@@ -396,6 +408,7 @@ impl Processes {
                     gtt: 0,
                     gpu_engines: [0.0; 5],
                     gpus: String::new(),
+                    compute_queues: 0,
                     io_r,
                     io_w,
                     pid,
@@ -447,7 +460,8 @@ impl Processes {
         }
         self.cnet = cnet;
         self.prev_cnet = prev_cnet;
-        for (pid, uses) in self.gpu_uses().iter() {
+        self.gpu_uses_cached = self.gpu_uses();
+        for (pid, uses) in self.gpu_uses_cached.iter() {
             if let Some(p) = procs.get_mut(pid) {
                 let mut ids = Vec::new();
                 for u in uses {
@@ -464,6 +478,32 @@ impl Processes {
                 ids.sort();
                 p.gpus = ids.join(",");
             }
+        }
+        // ROCm compute: its queues bypass the kernel, so fdinfo misses the
+        // work; count the compute units its waves occupy as compute use.
+        self.kfd = gpu::kfd();
+        for (pid, uses) in &self.kfd {
+            let Some(p) = procs.get_mut(pid) else { continue };
+            let drm = self.gpu_uses_cached.get(pid);
+            let mut ids: Vec<String> = p.gpus.split(',').filter(|s| !s.is_empty()).map(String::from).collect();
+            for c in uses {
+                p.compute_queues += c.queues;
+                p.gpu = p.gpu.max(c.cu_pct);
+                p.gpu_engines[1] = p.gpu_engines[1].max(c.cu_pct);
+                // fdinfo usually counts ROCm's VRAM already; add it only
+                // where it didn't.
+                if !drm.is_some_and(|d| d.iter().any(|u| u.pdev == c.pdev && u.vram > 0)) {
+                    p.vram += c.vram;
+                }
+                if let Some(i) = self.gpu_order.iter().position(|d| *d == c.pdev) {
+                    let id = (i + 1).to_string();
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            ids.sort();
+            p.gpus = ids.join(",");
         }
         self.procs = procs;
         self.apply_saved_view();
@@ -487,6 +527,13 @@ impl Processes {
                     for e in 0..5 {
                         t[i][e] = (t[i][e] + u.engines[e]).min(100.0);
                     }
+                }
+            }
+        }
+        for uses in self.kfd.values() {
+            for c in uses {
+                if let Some(i) = self.gpu_order.iter().position(|d| *d == c.pdev) {
+                    t[i][1] = (t[i][1] + c.cu_pct).min(100.0);
                 }
             }
         }
@@ -633,7 +680,9 @@ impl Processes {
             "name": p.name, "command": p.cmd, "exe": p.exe, "kernel": p.kernel, "count": 1,
             "containerRoot": container_root,
             "gpu": p.gpu, "vram": p.vram as f64, "gtt": p.gtt as f64, "gpus": p.gpus,
-            "gpuEngines": p.gpu_engines.iter().map(|v| format!("{v:.0}")).collect::<Vec<_>>().join("/"),
+            "gpuEngines": p.gpu_engines.iter().map(|v| format!("{v:.0}")).collect::<Vec<_>>().join("/")
+                + if p.compute_queues > 0 { " ROCm" } else { "" },
+            "computeQueues": p.compute_queues,
             "ioR": p.io_r, "ioW": p.io_w,
             // > 0 when this collapsed row shows totals for that many processes.
             "aggCount": 0,
@@ -937,6 +986,18 @@ impl Processes {
             list.truncate(5);
             out.insert(kind.into(), json!(list.iter().map(|(n, v, c)| json!({"name": n, "v": v, "n": c})).collect::<Vec<_>>()));
         }
+        // Programs holding ROCm compute queues: their work isn't measured
+        // per process, so they're the suspects when the GPU is busier than
+        // the programs above add up to.
+        let mut compute: HashMap<String, (u64, usize)> = HashMap::new();
+        for p in self.procs.values().filter(|p| p.compute_queues > 0) {
+            let e = compute.entry(display_name(p)).or_insert((0, 0));
+            e.0 += p.vram;
+            e.1 += 1;
+        }
+        let mut list: Vec<_> = compute.into_iter().collect();
+        list.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        out.insert("gpuCompute".into(), json!(list.iter().map(|(n, (v, c))| json!({"name": n, "v": *v as f64, "n": c})).collect::<Vec<_>>()));
         Value::Object(out)
     }
 
@@ -977,6 +1038,7 @@ mod tests {
         assert_eq!(display_name(&mk(".plasmashell-wr", "/nix/store/abc-plasma/bin/.plasmashell-wrapped")), "plasmashell");
         assert_eq!(display_name(&mk("python3", "/nix/store/x/bin/python3 -u /srv/whisperlive_server.py --port 9090")), "whisperlive_server.py");
         assert_eq!(display_name(&mk("python3", "python3 -m http.server")), "python3 http.server");
+        assert_eq!(display_name(&mk("python", "python -u /nix/store/zsd35lbngm1hnknnbwa3nsfhw80sf03w-whisperlive_server.py")), "whisperlive_server.py");
         assert_eq!(display_name(&mk("kworker/0:1", "[kworker/0:1]")), "kworker/0:1");
     }
 

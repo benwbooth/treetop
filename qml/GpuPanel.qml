@@ -102,6 +102,17 @@ Rectangle {
                         HoverHandler { id: eh }
                     }
                 }
+                // Busy the hardware reports that no process explains.
+                Text {
+                    Layout.fillWidth: true
+                    visible: (panel.gpu.unattributed || 0) >= 20
+                    wrapMode: Text.Wrap
+                    font: panel.font
+                    color: panel.warnColor
+                    text: "⚠ " + (panel.gpu.unattributed || 0).toFixed(0) + "% of the busy time isn't from any process treetop can see: "
+                        + "ROCm compute work (processes marked ROCm in the engines column), "
+                        + "other users' processes without root access, or a stuck GPU job."
+                }
                 Meter {
                     Layout.fillWidth: true; font: panel.font; textColor: panel.textColor; trackColor: panel.trackColor
                     label: "VRAM"; labelWidth: 8 * panel.font.pointSize
