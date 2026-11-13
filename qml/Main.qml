@@ -598,19 +598,23 @@ ApplicationWindow {
                 series: [{ values: win.hist.mem, color: win.cYellow }]
                 maximum: 100
             }
+            // Each GPU, then its VRAM right beside it.
             Repeater {
-                model: win.gpus.length
+                model: win.gpus.length * 2
                 StatCard {
-                    readonly property var g: win.gpus[index] || ({ busy: 0, number: 0, index: 0 })
+                    readonly property bool vram: index % 2 === 1
+                    readonly property var g: win.gpus[Math.floor(index / 2)] || ({ busy: 0, number: 0, index: 0, vramUsed: 0, vramTotal: 1 })
                     Layout.fillWidth: true
-                    title: "GPU " + g.number; accent: win.cMagenta; textColor: win.textColor; dimColor: win.dimColor; font: win.mono
-                    collapsible: true
+                    title: (vram ? "VRAM " : "GPU ") + g.number
+                    accent: vram ? win.cPink : win.cMagenta
+                    textColor: win.textColor; dimColor: win.dimColor; font: win.mono
+                    collapsible: !vram
                     onCollapseRequested: win.hideGpu(g.pdev)
-                    value: (g.busy || 0).toFixed(0) + "%"
-                    detail: Fmt.bytes(g.vramUsed) + " / " + Fmt.bytes(g.vramTotal)
-                        + (g.temp ? " · " + g.temp.toFixed(0) + "°C" : "")
-                        + (g.power ? " · " + g.power.toFixed(0) + "W" : "")
-                    series: [{ values: win.hist.gpu[g.index] || [], color: win.cMagenta }]
+                    value: vram ? ((g.vramUsed || 0) / Math.max(1, g.vramTotal || 0) * 100).toFixed(0) + "%" : (g.busy || 0).toFixed(0) + "%"
+                    detail: vram
+                        ? Fmt.bytes(g.vramUsed) + " / " + Fmt.bytes(g.vramTotal) + (g.gttUsed ? " · GTT " + Fmt.bytes(g.gttUsed) : "")
+                        : (g.temp ? g.temp.toFixed(0) + "°C" : "") + (g.power ? " · " + g.power.toFixed(0) + "W" : "")
+                    series: [{ values: (vram ? win.hist.vram : win.hist.gpu)[g.index] || [], color: vram ? win.cPink : win.cMagenta }]
                     maximum: 100
                     ToolTip.text: (g.name || "") + "\nClick for the GPU view · right-click to hide"
                     ToolTip.visible: gpuHover.hovered
