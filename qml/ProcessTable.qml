@@ -115,8 +115,36 @@ FocusScope {
     readonly property var forcedColumns: view === "gpu" ? ["gpu", "vram", "gpus", "engines"] : []
     // Column widths you set (key -> characters), applied over the defaults.
     property var widthOverride: ({})
-    readonly property var columnsEff: columns.map(c => c.chars > 0 && widthOverride[c.key]
-        ? Object.assign({}, c, { chars: widthOverride[c.key] }) : c)
+    // Column order you set by dragging headers (keys); Command stays last.
+    property var columnOrder: []
+    readonly property var columnsEff: {
+        const rank = (c, i) => c.key === "command" ? 1e9 : (columnOrder.indexOf(c.key) >= 0 ? columnOrder.indexOf(c.key) : 1e6 + i)
+        return columns.map((c, i) => ({ c: c, r: rank(c, i) }))
+            .sort((a, b) => a.r - b.r)
+            .map(x => x.c.chars > 0 && widthOverride[x.c.key] ? Object.assign({}, x.c, { chars: widthOverride[x.c.key] }) : x.c)
+    }
+    // Moves a column so it sits before `beforeKey` ("" = at the end).
+    function moveColumn(key, beforeKey) {
+        if (key === beforeKey || key === "command") return
+        const order = columnsEff.map(c => c.key).filter(k => k !== "command" && k !== key)
+        const at = beforeKey ? order.indexOf(beforeKey) : -1
+        if (at >= 0) order.splice(at, 0, key); else order.push(key)
+        columnOrder = order
+    }
+    // Header drag state.
+    property string dragKey: ""
+    property real dragX: 0
+    readonly property var dropTarget: {
+        // {before: key or "", x}: where a dragged header would land.
+        if (!dragKey) return null
+        const cx = dragX + list.contentX
+        for (const c of fixedColumns) {
+            const st = columnStart[c.key]
+            const left = 4 + st.at * cw, mid = left + (c.chars + 1) * cw / 2
+            if (cx < mid) return { before: c.key, x: left - 2 }
+        }
+        return { before: "", x: 4 + fixedChars * cw - 2 }
+    }
     readonly property var visibleColumns: columnsEff.filter(c =>
         c.key === "command" || forcedColumns.indexOf(c.key) >= 0
         || ((!c.optional || showContainerColumn) && hiddenColumns.indexOf(c.key) < 0))
@@ -484,9 +512,19 @@ FocusScope {
         // Column header: click to sort (again to reverse), right-click to
         // choose columns, hover for an explanation.
         Rectangle {
+            id: headerBar
             Layout.fillWidth: true
             implicitHeight: table.rowHeight + 3
             color: "#2e9e5b"
+            // Where a dragged column will land.
+            Rectangle {
+                z: 4
+                visible: table.dropTarget !== null
+                x: table.dropTarget ? table.dropTarget.x - list.contentX : 0
+                width: 3
+                height: parent.height
+                color: "#e0c14f"
+            }
             MouseArea {
                 anchors.fill: parent
                 acceptedButtons: Qt.RightButton
@@ -587,12 +625,32 @@ FocusScope {
                         ToolTip.delay: 600
                         ToolTip.timeout: 20000
                         ToolTip.text: "<b>" + modelData.title + "</b><br>" + modelData.tip
-                            + "<br><br><i>Click to sort, right-click to choose columns.</i>"
+                            + "<br><br><i>Click to sort, drag to move, right-click to choose columns.</i>"
+                        opacity: table.dragKey === modelData.key ? 0.45 : 1
+                        // Click sorts; drag sideways to move the column.
                         MouseArea {
                             anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
+                            cursorShape: table.dragKey ? Qt.ClosedHandCursor : Qt.PointingHandCursor
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            preventStealing: true
+                            property real pressX: 0
+                            property bool dragged: false
+                            onPressed: (mouse) => { pressX = mouse.x; dragged = false }
+                            onPositionChanged: (mouse) => {
+                                if (!(pressed && (mouse.buttons & Qt.LeftButton)) || modelData.key === "command") return
+                                if (!dragged && Math.abs(mouse.x - pressX) > 8) { dragged = true; table.dragKey = modelData.key }
+                                if (dragged) table.dragX = mapToItem(headerBar, mouse.x, 0).x
+                            }
+                            onReleased: (mouse) => {
+                                if (dragged) {
+                                    const t = table.dropTarget
+                                    if (t) table.moveColumn(modelData.key, t.before)
+                                    table.dragKey = ""
+                                }
+                            }
+                            onCanceled: table.dragKey = ""
                             onClicked: (mouse) => {
+                                if (dragged) return
                                 if (mouse.button === Qt.RightButton) {
                                     const p = mapToItem(table, mouse.x, mouse.y)
                                     columnMenu.popup(p.x, p.y)
