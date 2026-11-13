@@ -108,12 +108,101 @@ FocusScope {
         return (c.right ? t.padStart(c.chars) : t.padEnd(c.chars)) + " "
     }
 
+    // ---- command-line highlighting ---------------------------------------
+    readonly property bool darkBase: baseColor.hslLightness < 0.5
+    readonly property var syn: darkBase ? {
+        dir: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.45), prog: "#7fe08f",
+        flag: "#56b6e0", eq: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.45), value: "#e3c25a",
+        path: "#7f97c9", leaf: "#a9c1f2", number: "#c98ae0", url: "#e8995a", plain: textColor,
+    } : {
+        dir: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.5), prog: "#17803a",
+        flag: "#16709a", eq: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.5), value: "#8f6a00",
+        path: "#3f5d99", leaf: "#203f80", number: "#86379f", url: "#a8541a", plain: textColor,
+    }
+    // Plain object mutated in place: filling it mustn't notify bindings.
+    readonly property var synCache: ({ map: {}, size: 0 })
+    function clearSynCache() { synCache.map = {}; synCache.size = 0 }
+    onSynChanged: clearSynCache()
+
+    function span(color, text, bold) {
+        if (!text) return ""
+        const t = Fmt.escape(text)
+        return "<font color='" + color + "'>" + (bold ? "<b>" + t + "</b>" : t) + "</font>"
+    }
+    function pathHtml(tok) {
+        const i = tok.lastIndexOf("/")
+        if (i < 0 || i === tok.length - 1) return span(syn.path, tok)
+        return span(syn.path, tok.slice(0, i + 1)) + span(syn.leaf, tok.slice(i + 1))
+    }
+    function valueHtml(v) {
+        if (v.indexOf("://") > 0) return span(syn.url, v)
+        if (v.indexOf("/") >= 0) return pathHtml(v)
+        if (/^-?[0-9][0-9.,:xXa-fA-FkKmMgG]*$/.test(v)) return span(syn.number, v)
+        return span(syn.value, v)
+    }
+    function argHtml(tok) {
+        if (tok.startsWith("-") && tok.length > 1 && !/^-[0-9]/.test(tok)) {
+            const eq = tok.indexOf("=")
+            if (eq > 0) return span(syn.flag, tok.slice(0, eq)) + span(syn.eq, "=") + valueHtml(tok.slice(eq + 1))
+            return span(syn.flag, tok)
+        }
+        const eq = tok.indexOf("=")
+        if (eq > 0 && /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(tok.slice(0, eq)))
+            return span(syn.flag, tok.slice(0, eq)) + span(syn.eq, "=") + valueHtml(tok.slice(eq + 1))
+        if (tok.indexOf("://") > 0) return span(syn.url, tok)
+        if (tok.indexOf("/") >= 0) return pathHtml(tok)
+        if (/^-?[0-9][0-9.,:]*$/.test(tok)) return span(syn.number, tok)
+        if (tok.startsWith("[") && tok.endsWith("]")) return span(syn.dir, tok)   // kernel threads
+        return span(syn.plain, tok)
+    }
+    // Program dir dim, program name bold, then each argument coloured by
+    // kind: flags, values, paths, numbers, URLs. Cached per command line.
+    function highlight(command) {
+        const hit = synCache.map[command]
+        if (hit !== undefined) return hit
+        const cmd = tidy(command)
+        const parts = cmd.split(/( +)/)
+        const prog = parts[0] || ""
+        const slash = prog.lastIndexOf("/")
+        let out = span(syn.dir, prog.slice(0, slash + 1)) + span(syn.prog, prog.slice(slash + 1), true)
+        for (let i = 1; i < parts.length; i++) {
+            const p = parts[i]
+            out += /^ +$/.test(p) ? p.replace(/ /g, "&nbsp;") : argHtml(p)
+        }
+        if (synCache.size > 5000) clearSynCache()
+        synCache.map[command] = out
+        synCache.size++
+        return out
+    }
+
+    // The tooltip version: program on the first line, then one argument per
+    // indented line, keeping "--flag value" pairs together.
+    // (Unshortened: the tooltip shows the full /nix/store paths.)
+    function prettyCommand(command) {
+        const toks = command.split(/ +/).filter(t => t.length)
+        if (toks.length === 0) return ""
+        const prog = toks[0], slash = prog.lastIndexOf("/")
+        const lines = [span(syn.dir, prog.slice(0, slash + 1)) + span(syn.prog, prog.slice(slash + 1), true)]
+        const indent = "&nbsp;&nbsp;&nbsp;&nbsp;"
+        for (let i = 1; i < toks.length; i++) {
+            const t = toks[i], next = toks[i + 1]
+            const isFlag = t.startsWith("-") && t.length > 1 && !/^-[0-9]/.test(t) && t.indexOf("=") < 0
+            if (isFlag && next !== undefined && !next.startsWith("-")) {
+                lines.push(indent + argHtml(t) + "&nbsp;" + argHtml(next))
+                i++
+            } else {
+                lines.push(indent + argHtml(t))
+            }
+        }
+        return "<span style='white-space:pre'>" + lines.join("<br>") + "</span>"
+    }
+
     ListModel { id: rows }
     property var keys: []   // mirror of rows' keys, for fast lookup
     // Longest command line seen (in characters): how far rows scroll sideways.
     property int maxLineChars: 0
     onViewChanged: maxLineChars = 0
-    onShortenStorePathsChanged: maxLineChars = 0
+    onShortenStorePathsChanged: { maxLineChars = 0; clearSynCache() }
 
     function applyDiff(d) {
         // Where is the selected row on screen right now?
@@ -304,8 +393,10 @@ FocusScope {
             // keep coasting with momentum when it lifts.
             property real wheelTarget: 0
             property real lastWheel: 0
-            property real tpVelocity: 0
+            property real tpVelocity: 0     // touchpad, px/s (vertical)
+            property real tpVelocityX: 0    // touchpad, px/s (horizontal)
             property real tpLast: 0
+            property real wheelTargetX: 0
             NumberAnimation {
                 id: wheelAnim
                 target: list
@@ -313,34 +404,50 @@ FocusScope {
                 duration: 180
                 easing.type: Easing.OutCubic
             }
+            NumberAnimation {
+                id: wheelAnimX
+                target: list
+                property: "contentX"
+                duration: 180
+                easing.type: Easing.OutCubic
+            }
             function clampY(y) { return Math.max(0, Math.min(y, Math.max(0, contentHeight - height))) }
             function clampX(x) { return Math.max(0, Math.min(x, Math.max(0, contentWidth - width))) }
             function scrollX(dx) { contentX = clampX(contentX + dx) }
+            // Mouse-wheel style sideways step: glides, accelerates when spun fast.
+            function glideX(dx) {
+                if (!wheelAnimX.running) wheelTargetX = contentX
+                wheelTargetX = clampX(wheelTargetX + dx)
+                wheelAnimX.stop()
+                wheelAnimX.from = contentX
+                wheelAnimX.to = wheelTargetX
+                wheelAnimX.start()
+            }
             WheelHandler {
                 target: null
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 onWheel: (ev) => {
                     const now = Date.now()
-                    // Sideways: touchpad swipes, tilt wheels, or Shift+wheel.
-                    if (ev.pixelDelta.x !== 0) list.scrollX(-ev.pixelDelta.x)
-                    else if (ev.angleDelta.x !== 0) list.scrollX(-ev.angleDelta.x / 120 * table.cw * 8)
-                    if ((ev.modifiers & Qt.ShiftModifier) && ev.angleDelta.y !== 0 && ev.pixelDelta.y === 0) {
-                        list.scrollX(-ev.angleDelta.y / 120 * table.cw * 8)
-                        ev.accepted = true
-                        return
-                    }
-                    if (ev.pixelDelta.y !== 0) {
-                        // Touchpad: follow directly, remember speed for the fling.
-                        wheelAnim.stop()
+                    const fast = now - list.lastWheel < 60 ? 2.2 : (now - list.lastWheel < 140 ? 1.5 : 1)
+                    if (ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0) {
+                        // Touchpad: follow the fingers on both axes and remember
+                        // the speed, so lifting them keeps it coasting.
+                        wheelAnim.stop(); wheelAnimX.stop()
                         list.cancelFlick()
-                        const dy = -ev.pixelDelta.y
+                        const dx = -ev.pixelDelta.x, dy = -ev.pixelDelta.y
                         const dt = Math.max(1, now - list.tpLast)
+                        list.tpVelocityX = list.tpVelocityX * 0.6 + (dx / dt * 1000) * 0.4
                         list.tpVelocity = list.tpVelocity * 0.6 + (dy / dt * 1000) * 0.4
                         list.tpLast = now
-                        list.contentY = list.clampY(list.contentY + dy)
+                        if (dx !== 0) list.contentX = list.clampX(list.contentX + dx)
+                        if (dy !== 0) list.contentY = list.clampY(list.contentY + dy)
                         flingTimer.restart()
+                    } else if (ev.angleDelta.x !== 0 || ((ev.modifiers & Qt.ShiftModifier) && ev.angleDelta.y !== 0)) {
+                        // Tilt wheel or Shift+wheel: glide sideways.
+                        const d = ev.angleDelta.x !== 0 ? ev.angleDelta.x : ev.angleDelta.y
+                        list.lastWheel = now
+                        list.glideX(-d / 120 * table.cw * 10 * fast)
                     } else if (ev.angleDelta.y !== 0) {
-                        const fast = now - list.lastWheel < 60 ? 2.2 : (now - list.lastWheel < 140 ? 1.5 : 1)
                         if (!wheelAnim.running) list.wheelTarget = list.contentY
                         list.lastWheel = now
                         list.wheelTarget = list.clampY(list.wheelTarget - ev.angleDelta.y / 120 * table.rowHeight * 3 * fast)
@@ -353,12 +460,16 @@ FocusScope {
                 }
             }
             Timer {
-                // No touchpad events for a moment: the fingers lifted, so coast.
+                // No touchpad events for a moment: the fingers lifted, so coast
+                // (both directions).
                 id: flingTimer
                 interval: 40
                 onTriggered: {
-                    if (Math.abs(list.tpVelocity) > 150) list.flick(0, -list.tpVelocity)
+                    const vx = Math.abs(list.tpVelocityX) > 150 ? -list.tpVelocityX : 0
+                    const vy = Math.abs(list.tpVelocity) > 150 ? -list.tpVelocity : 0
+                    if (vx !== 0 || vy !== 0) list.flick(vx, vy)
                     list.tpVelocity = 0
+                    list.tpVelocityX = 0
                 }
             }
             onCurrentIndexChanged: {
@@ -450,15 +561,7 @@ FocusScope {
                     return fg
                 }
                 function commandHtml() {
-                    // htop highlights the program's basename within the command line.
-                    const cmd = table.tidy(command)
-                    const sp = cmd.indexOf(" ")
-                    const prog = sp < 0 ? cmd : cmd.slice(0, sp)
-                    const base = prog.slice(prog.lastIndexOf("/") + 1)
-                    const head = prog.slice(0, prog.length - base.length)
-                    const rest = sp < 0 ? "" : cmd.slice(sp)
-                    const dim = current ? table.highlightTextColor : table.dimColor
-                    return "<span style='color:" + dim + "'>" + Fmt.escape(head) + "</span><b>" + Fmt.escape(base) + "</b>" + Fmt.escape(rest)
+                    return current ? Fmt.escape(table.tidy(command)) : table.highlight(command)
                 }
 
                 function fixedHtml() {
@@ -546,6 +649,27 @@ FocusScope {
                         font: table.font
                         color: rowItem.group ? (rowItem.current ? table.highlightTextColor : table.dimColor) : rowItem.fg
                         anchors.verticalCenter: parent.verticalCenter
+                        // Hover: the whole command (full paths), one argument per
+                        // line, in the monospace font. Created only while hovered.
+                        HoverHandler { id: cmdHover }
+                        Loader {
+                            active: cmdHover.hovered && !rowItem.group && rowItem.command.length > 0
+                            sourceComponent: ToolTip {
+                                visible: true
+                                delay: 700
+                                timeout: 60000
+                                font: table.font
+                                contentItem: Text {
+                                    textFormat: Text.StyledText
+                                    font: table.font
+                                    color: table.textColor
+                                    wrapMode: Text.WrapAnywhere
+                                    text: table.prettyCommand(rowItem.command)
+                                        + "<br><br><font color='" + table.dimColor + "'>PID " + rowItem.pid + " · " + Fmt.escape(rowItem.user)
+                                        + (rowItem.container ? " · ⬢ " + Fmt.escape(rowItem.container) : "") + "</font>"
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -591,9 +715,9 @@ FocusScope {
                     }
                     list.incrementCurrentIndex()
                 } else if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Right) {
-                    list.scrollX(table.cw * 8)
+                    list.glideX(table.cw * 8)
                 } else if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Left) {
-                    list.scrollX(-table.cw * 8)
+                    list.glideX(-table.cw * 8)
                 } else if (t === "+" || t === "=" || event.key === Qt.Key_Right) {
                     table.setCollapsed(false)
                 } else if (t === "-" || event.key === Qt.Key_Left) {
