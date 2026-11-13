@@ -30,7 +30,11 @@ FocusScope {
     signal notice(string text)
     signal showDetails(int pid)
 
-    readonly property real cw: fm.advanceWidth("0")
+    // One character's width as the row text is actually drawn. Native text
+    // rendering snaps glyph advances to whole pixels, so the font's
+    // fractional advance would let the header drift from the rows.
+    readonly property real cw: cwProbe.implicitWidth > 0 ? cwProbe.implicitWidth / 100 : fm.advanceWidth("0")
+    Text { id: cwProbe; visible: false; font: table.font; text: "0".repeat(100) }
     readonly property real rowHeight: Math.ceil(fm.height) + 3
     FontMetrics { id: fm; font: table.font }
 

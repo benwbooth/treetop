@@ -123,7 +123,8 @@ ApplicationWindow {
         property bool showCards: true
         property bool showKernel: false
         property real fontDelta: 0
-        property string hiddenColumns: "pri,ni,shr,gpus,engines,container"
+        property string hiddenColumns: "pri,ni,shr,gpus,engines,container,time"
+        property int columnsVersion: 0
         property bool shortenStorePaths: true
         property bool showResources: true
         property bool cpuCombined: false
@@ -204,6 +205,13 @@ ApplicationWindow {
         // back the way it was. A real login start stays in the tray.
         if (startHidden && settings.lastVisible && Date.now() - settings.lastAlive < 30000) win.show()
         booted = true
+        // One-time: TIME+ is now hidden by default; apply that to saved settings too.
+        if (settings.columnsVersion < 1) {
+            const h = settings.hiddenColumns.split(",").filter(x => x.length > 0)
+            if (h.indexOf("time") < 0) h.push("time")
+            settings.hiddenColumns = h.join(",")
+            settings.columnsVersion = 1
+        }
         settings.lastAlive = Date.now()
         autostart = mon.autostart_enabled()
         mon.set_interval(settings.interval)
