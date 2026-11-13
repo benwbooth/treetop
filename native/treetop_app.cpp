@@ -1,6 +1,9 @@
 #include "treetop_app.h"
 
 #include <QtCore/QTimer>
+#include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusMessage>
+#include <QtDBus/QDBusVirtualObject>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QIcon>
 #include <QtNetwork/QLocalServer>
@@ -12,6 +15,37 @@
 #include <QtWidgets/QApplication>
 
 #include <unistd.h>
+
+// com.benwbooth.treetop on the session bus: Toggle() / Show(), so the
+// panel widget and tray can show/hide the window without needing treetop
+// on PATH. A virtual object, so no moc is needed.
+namespace {
+class TreetopBus : public QDBusVirtualObject
+{
+public:
+    explicit TreetopBus(QObject *root) : m_root(root) {}
+    QString introspect(const QString &) const override
+    {
+        return QStringLiteral(
+            "<interface name=\"com.benwbooth.treetop\">"
+            "<method name=\"Toggle\"/><method name=\"Show\"/><method name=\"Hide\"/>"
+            "</interface>");
+    }
+    bool handleMessage(const QDBusMessage &message, const QDBusConnection &connection) override
+    {
+        const QString m = message.member();
+        const char *slot = m == QLatin1String("Toggle") ? "toggleWindow"
+                         : m == QLatin1String("Show") ? "showWindow"
+                         : m == QLatin1String("Hide") ? "hideWindow" : nullptr;
+        if (!slot) return false;
+        QMetaObject::invokeMethod(m_root, slot, Qt::QueuedConnection);
+        connection.send(message.createReply());
+        return true;
+    }
+private:
+    QObject *m_root;
+};
+}
 
 static QString serverName()
 {
@@ -68,6 +102,11 @@ int treetopRun(bool startHidden, bool toggle)
         return 1;
     }
     QObject *root = engine.rootObjects().constFirst();
+
+    static TreetopBus bus(root);
+    QDBusConnection session = QDBusConnection::sessionBus();
+    session.registerVirtualObject(QStringLiteral("/treetop"), &bus);
+    session.registerService(QStringLiteral("com.benwbooth.treetop"));
 
     QObject::connect(&server, &QLocalServer::newConnection, &server, [&server, root] {
         while (QLocalSocket *s = server.nextPendingConnection()) {

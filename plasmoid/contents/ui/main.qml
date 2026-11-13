@@ -151,8 +151,12 @@ PlasmoidItem {
         connectedSources: []
         onNewData: (source) => disconnectSource(source)
     }
+    // Show/hide treetop over D-Bus (works however it was started); if it
+    // isn't running, start it (through devloop when that manages it).
     function toggleTreetop() {
-        exec.connectSource("treetop --toggle || devloop start treetop")
+        exec.connectSource("busctl --user call com.benwbooth.treetop /treetop com.benwbooth.treetop Toggle >/dev/null 2>&1"
+            + " || devloop start treetop >/dev/null 2>&1"
+            + " || setsid treetop >/dev/null 2>&1 &")
     }
 
     toolTipMainText: "treetop"

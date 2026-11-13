@@ -19,6 +19,7 @@ fn main() {
     .cpp_file("native/treetop_app.cpp")
     .qt_module("Gui")
     .qt_module("Network")
+    .qt_module("DBus")
     .qt_module("Quick")
     .qt_module("QuickControls2")
     .qt_module("Widgets")

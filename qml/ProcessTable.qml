@@ -737,25 +737,57 @@ FocusScope {
                         color: rowItem.group ? "transparent" : rowItem.chip
                     }
                     Item { width: 3; height: 1 }
-                    Text {
-                        // htop's tree lines; container groups indent one level first.
-                        text: (rowItem.depth > 0 && table.view === "containers" && rowItem.prefix === "" ? "  " : "") + rowItem.prefix
-                        font: table.font
-                        color: rowItem.current ? table.highlightTextColor : table.dimColor
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Text {
-                        width: table.cw * 2
-                        text: rowItem.hasChildren && table.view !== "flat" && table.view !== "gpu" ? (rowItem.expanded ? "▾" : "▸") : ""
-                        font: table.font
-                        color: rowItem.fg
-                        anchors.verticalCenter: parent.verticalCenter
-                        MouseArea {
+                    // Tree lines + ▸/▾: one big click target (the whole indent
+                    // up to the name). Click toggles; Shift+click expands or
+                    // collapses everything underneath.
+                    Item {
+                        readonly property bool canToggle: rowItem.hasChildren && table.view !== "flat" && table.view !== "gpu"
+                        width: treeLines.implicitWidth + arrow.width
+                        height: rowItem.height
+                        Rectangle {
                             anchors.fill: parent
-                            anchors.margins: -2
-                            enabled: rowItem.hasChildren
-                            onClicked: table.monitor.toggle(rowItem.key)
+                            anchors.margins: 1
+                            radius: 3
+                            visible: parent.canToggle && expHover.hovered
+                            color: Qt.rgba(table.textColor.r, table.textColor.g, table.textColor.b, 0.12)
                         }
+                        Text {
+                            id: treeLines
+                            // htop's tree lines; container groups indent one level first.
+                            text: (rowItem.depth > 0 && table.view === "containers" && rowItem.prefix === "" ? "  " : "") + rowItem.prefix
+                            font: table.font
+                            color: rowItem.current ? table.highlightTextColor : table.dimColor
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            id: arrow
+                            x: treeLines.implicitWidth
+                            width: table.cw * 2
+                            text: parent.canToggle ? (rowItem.expanded ? "▾" : "▸") : ""
+                            font.family: table.font.family
+                            font.pointSize: table.font.pointSize
+                            font.bold: expHover.hovered
+                            color: expHover.hovered ? "#56b6e0" : rowItem.fg
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        HoverHandler {
+                            id: expHover
+                            enabled: parent.canToggle
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                        TapHandler {
+                            enabled: parent.canToggle
+                            gesturePolicy: TapHandler.ReleaseWithinBounds
+                            onTapped: (point) => {
+                                if (point.modifiers & Qt.ShiftModifier)
+                                    table.monitor.set_subtree_expanded(rowItem.key, !rowItem.expanded)
+                                else
+                                    table.monitor.toggle(rowItem.key)
+                            }
+                        }
+                        ToolTip.visible: canToggle && expHover.hovered
+                        ToolTip.delay: 900
+                        ToolTip.text: (rowItem.expanded ? "Collapse" : "Expand") + " · Shift+click: everything below · keys: ← → (+ −), Shift+← → scrolls"
                     }
                     // Container badge: on a container group row, on the first
                     // process inside each container in the tree, and on every
@@ -858,6 +890,10 @@ FocusScope {
                     list.glideX(table.cw * 8)
                 } else if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Left) {
                     list.glideX(-table.cw * 8)
+                } else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_Right || event.key === Qt.Key_Left)) {
+                    // Ctrl+→ / Ctrl+←: expand / collapse the whole subtree.
+                    const i = table.currentRow()
+                    if (i >= 0) table.monitor.set_subtree_expanded(rows.get(i).key, event.key === Qt.Key_Right)
                 } else if (t === "+" || t === "=" || event.key === Qt.Key_Right) {
                     table.setCollapsed(false)
                 } else if (t === "-" || event.key === Qt.Key_Left) {

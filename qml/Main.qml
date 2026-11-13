@@ -256,8 +256,11 @@ ApplicationWindow {
         win.raise()
         win.requestActivate()
     }
+    function hideWindow() { win.hide() }
+    // Open (and not minimized) -> hide; otherwise show. Not "focused": a
+    // click on the panel widget or tray takes focus away first.
     function toggleWindow() {
-        if (win.visible && win.active) win.hide(); else showWindow()
+        if (win.visible && win.visibility !== Window.Minimized) win.hide(); else showWindow()
     }
     onClosing: (close) => {
         // Closing hides to the tray (our icon or the tray widget).
@@ -1237,6 +1240,8 @@ ApplicationWindow {
                 + "+ / − / ← →   expand / collapse subtree\n"
                 + "Shift+← →     scroll sideways (Shift+wheel too)\n"
                 + "* / _         expand all / collapse all\n"
+                + "Ctrl+→ / Ctrl+←  expand / collapse everything below\n"
+                + "Click ▸/▾ (or the tree lines); Shift+click: whole subtree\n"
                 + "Enter         details\n"
                 + "f / double-click  show only this process tree (again or Esc: all)\n"
                 + "F9 / k        signal menu (right-click too)\n"

@@ -46,6 +46,9 @@ pub mod qobject {
         fn toggle(self: &Monitor, key: &QString);
         #[qinvokable]
         fn set_expanded_all(self: &Monitor, expanded: bool);
+        /// Expand or collapse a process and everything below it.
+        #[qinvokable]
+        fn set_subtree_expanded(self: &Monitor, key: &QString, expanded: bool);
         #[qinvokable]
         fn set_view(self: &Monitor, view: &QString);
         #[qinvokable]
@@ -277,6 +280,33 @@ impl qobject::Monitor {
                     .map(|x| format!("p:{}", x.ppid))
                     .collect();
                 p.collapsed.extend(parents);
+            }
+        });
+    }
+
+    fn set_subtree_expanded(&self, key: &QString, expanded: bool) {
+        let key = key.to_string();
+        self.with_state(|s| {
+            let p = &mut s.procs;
+            let Some(root) = key.strip_prefix("p:").and_then(|k| k.parse::<i32>().ok()) else {
+                // Container group rows: just that row.
+                if expanded { p.collapsed.remove(&key); } else { p.collapsed.insert(key); }
+                return;
+            };
+            let mut children: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
+            for x in p.procs.values() {
+                children.entry(x.ppid).or_default().push(x.pid);
+            }
+            let mut stack = vec![root];
+            while let Some(pid) = stack.pop() {
+                let k = format!("p:{pid}");
+                let kids = children.get(&pid).cloned().unwrap_or_default();
+                if expanded {
+                    p.collapsed.remove(&k);
+                } else if !kids.is_empty() {
+                    p.collapsed.insert(k);
+                }
+                stack.extend(kids);
             }
         });
     }
