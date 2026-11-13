@@ -45,7 +45,19 @@ ApplicationWindow {
     property var hist: ({ cpu: [], mem: [], rx: [], tx: [], rd: [], wr: [], gpu: [], vram: [] })
     // GPUs the user hid (by PCI address), and the rest with their numbers.
     readonly property var hiddenGpus: settings.hiddenGpus.split(",").filter(x => x.length > 0)
-    readonly property var gpus: snap.gpus.map((g, i) => Object.assign({ number: i + 1, index: i }, g)).filter(g => hiddenGpus.indexOf(g.pdev) < 0)
+    readonly property var pinnedGpus: settings.pinnedGpus.split(",").filter(x => x.length > 0)
+    // A GPU that did nothing for the last minute (and doesn't drive a
+    // display) folds away on its own; it comes back when it gets busy.
+    function gpuIdle(i, g) {
+        if (g.display) return false
+        const h = hist.gpu[i] || []
+        if (h.length < 20) return false
+        const recent = h.slice(-60)
+        const vram = g.vramTotal > 0 ? g.vramUsed / g.vramTotal * 100 : 0
+        return Math.max(...recent) < 3 && vram < 10
+    }
+    readonly property var allGpus: snap.gpus.map((g, i) => Object.assign({ number: i + 1, index: i, idle: gpuIdle(i, g) }, g))
+    readonly property var gpus: allGpus.filter(g => hiddenGpus.indexOf(g.pdev) < 0 && (!g.idle || pinnedGpus.indexOf(g.pdev) >= 0))
     readonly property var collapsed: settings.collapsedSections.split(",").filter(x => x.length > 0)
     function sectionOpen(key) { return collapsed.indexOf(key) < 0 }
     function toggleSection(key) {
@@ -106,14 +118,20 @@ ApplicationWindow {
     }
     readonly property var focusInfo: snap.procs && snap.procs.focus ? snap.procs.focus : null
     function setGpuShown(pdev, show) {
-        if (show) settings.hiddenGpus = hiddenGpus.filter(p => p !== pdev).join(",")
-        else hideGpu(pdev)
+        if (show) {
+            settings.hiddenGpus = hiddenGpus.filter(p => p !== pdev).join(",")
+            // "Show" on an idle GPU keeps it shown even while idle.
+            const g = allGpus.find(x => x.pdev === pdev)
+            if (g && g.idle && pinnedGpus.indexOf(pdev) < 0) settings.pinnedGpus = pinnedGpus.concat([pdev]).join(",")
+        } else hideGpu(pdev)
     }
-    // Hidden GPUs, so each can leave a "click to show" placeholder behind.
-    readonly property var hiddenGpuList: snap.gpus.map((g, i) => Object.assign({ number: i + 1 }, g)).filter(g => hiddenGpus.indexOf(g.pdev) >= 0)
+    // GPUs not shown (hidden by you, or idle), each leaving a "+ show" behind.
+    readonly property var hiddenGpuList: allGpus.filter(g => gpus.indexOf(g) < 0)
+        .map(g => Object.assign({ reason: hiddenGpus.indexOf(g.pdev) >= 0 ? "hidden" : "idle" }, g))
     function hideGpu(pdev) {
         const h = hiddenGpus.slice(); if (h.indexOf(pdev) < 0) h.push(pdev)
         settings.hiddenGpus = h.join(",")
+        settings.pinnedGpus = pinnedGpus.filter(p => p !== pdev).join(",")
     }
     property string status: ""
     property string view: settings.view
@@ -132,6 +150,7 @@ ApplicationWindow {
         property bool showResources: true
         property bool cpuCombined: false
         property string hiddenGpus: ""
+        property string pinnedGpus: ""
         // Restart detection: a --hidden start soon after an instance was
         // alive (devloop rebuild) restores the window instead of hiding it.
         property real lastAlive: 0
@@ -529,7 +548,7 @@ ApplicationWindow {
                     Layout.preferredWidth: implicitWidth
                     Layout.preferredHeight: 92
                     Layout.maximumHeight: 92
-                    label: "GPU " + g.number + "\nhidden"
+                    label: "GPU " + g.number + "\n" + (g.reason || "hidden")
                     onRestore: win.setGpuShown(g.pdev, true)
                 }
             }
@@ -578,7 +597,7 @@ ApplicationWindow {
                     readonly property var g: win.hiddenGpuList[index] || ({})
                     Layout.fillWidth: true
                     inline: true
-                    label: "GPU" + g.number + " (" + (g.name || "") + ") is hidden"
+                    label: "GPU" + g.number + " (" + (g.name || "") + ") is " + (g.reason === "idle" ? "idle" : "hidden")
                     onRestore: win.setGpuShown(g.pdev, true)
                 }
             }
@@ -730,7 +749,7 @@ ApplicationWindow {
                     title: "GPU"
                     open: win.sectionOpen("gpu")
                     summary: win.gpus.map(g => "GPU" + g.number + " " + g.busy.toFixed(0) + "%").join(" · ")
-                        + (win.hiddenGpuList.length ? (win.gpus.length ? " · " : "") + win.hiddenGpuList.length + " hidden" : "")
+                        + (win.hiddenGpuList.length ? (win.gpus.length ? " · " : "") + win.hiddenGpuList.map(g => "GPU" + g.number + " " + g.reason).join(" · ") : "")
                     onToggled: win.toggleSection("gpu")
                 }
                 Repeater {
@@ -779,7 +798,7 @@ ApplicationWindow {
                         readonly property var g: win.hiddenGpuList[index] || ({})
                         Layout.fillWidth: true
                         inline: true
-                        label: "GPU" + g.number + " hidden"
+                        label: "GPU" + g.number + " " + (g.reason || "hidden") + (g.reason === "idle" ? " (" + (g.name || "") + ")" : "")
                         onRestore: win.setGpuShown(g.pdev, true)
                     }
                 }

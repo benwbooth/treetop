@@ -102,9 +102,13 @@ pub struct Gpu {
     pub fan_pct: Option<f64>,
     pub link: String,
     pub perf_level: String,
+    /// Drives a connected display (the primary GPU).
+    pub display: bool,
 }
 
 struct AmdCard {
+    /// DRM name ("card1"), for finding its display connectors.
+    drm: String,
     device: PathBuf,
     hwmon: Option<PathBuf>,
     name: String,
@@ -156,11 +160,26 @@ fn amd_cards() -> Vec<AmdCard> {
             .or_else(|| lspci_name(&pci))
             .map(|n| if vram >= 2 << 30 { n } else { format!("{n} (integrated)") })
             .unwrap_or_else(|| format!("{kind} {short}"));
-        cards.push(AmdCard { device, hwmon, name, pdev: pci, vram });
+        cards.push(AmdCard { drm: n.clone(), device, hwmon, name, pdev: pci, vram });
     }
-    // Discrete cards first.
-    cards.sort_by(|a, b| b.vram.cmp(&a.vram));
+    // The card driving the displays first (the primary GPU), then by VRAM.
+    cards.sort_by(|a, b| drives_display(&b.drm).cmp(&drives_display(&a.drm)).then(b.vram.cmp(&a.vram)));
     cards
+}
+
+/// Whether a DRM card has a connected, enabled display connector.
+fn drives_display(drm: &str) -> bool {
+    let prefix = format!("{drm}-");
+    fs::read_dir("/sys/class/drm")
+        .map(|d| {
+            d.flatten().any(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.starts_with(&prefix)
+                    && read(e.path().join("status")).map(|s| s.trim() == "connected").unwrap_or(false)
+                    && read(e.path().join("enabled")).map(|s| s.trim() != "disabled").unwrap_or(true)
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn amd_sample(card: &AmdCard) -> Gpu {
@@ -206,6 +225,7 @@ fn amd_sample(card: &AmdCard) -> Gpu {
         fan_pct: pwm,
         link,
         perf_level: read(d.join("power_dpm_force_performance_level")).map(|s| s.trim().to_string()).unwrap_or_default(),
+        display: drives_display(&card.drm),
     }
 }
 
@@ -454,7 +474,7 @@ impl System {
                 "temp": g.temp_c, "tempJunction": g.temp_junction, "tempMem": g.temp_mem,
                 "power": g.power_w, "powerCap": g.power_cap_w, "sclk": g.sclk_mhz, "mclk": g.mclk_mhz,
                 "voltage": g.voltage_mv, "fanRpm": g.fan_rpm, "fanMaxRpm": g.fan_max_rpm, "fanPct": g.fan_pct,
-                "link": g.link, "perfLevel": g.perf_level,
+                "link": g.link, "perfLevel": g.perf_level, "display": g.display,
                 "engines": [0.0, 0.0, 0.0, 0.0, 0.0],
             })).collect::<Vec<_>>(),
             "disk": {"read": rd_total, "write": wr_total, "devices": disks, "filesystems": filesystems},

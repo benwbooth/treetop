@@ -9,6 +9,7 @@
     <entry name="showGpu" type="Bool"><default>true</default></entry>
     <entry name="hiddenGpus" type="StringList"><default></default></entry>
     <entry name="showVram" type="Bool"><default>true</default></entry>
+    <entry name="hideIdleGpus" type="Bool"><default>true</default></entry>
     <entry name="showDisk" type="Bool"><default>true</default></entry>
     <!-- "usage": space used on diskSensor; "io": read+write rate -->
     <entry name="diskMode" type="String"><default>usage</default></entry>

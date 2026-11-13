@@ -9,6 +9,8 @@ KCM.SimpleKCM {
     property alias cfg_showMemory: showMemory.checked
     property alias cfg_showGpu: showGpu.checked
     property alias cfg_showVram: showVram.checked
+    property alias cfg_hideIdleGpus: hideIdle.checked
+    property bool cfg_hideIdleGpusDefault
     property bool cfg_showVramDefault
     property var cfg_hiddenGpus: []
     property alias cfg_showDisk: showDisk.checked
@@ -49,6 +51,7 @@ KCM.SimpleKCM {
             }
         }
         QQC2.CheckBox { id: showVram; visible: showGpu.checked; text: i18n("   GPU memory (VRAM)") }
+        QQC2.CheckBox { id: hideIdle; visible: showGpu.checked; text: i18n("   Hide GPUs that are idle (not the one driving the display)") }
         QQC2.CheckBox { id: showDisk; text: i18n("Disk") }
         QQC2.CheckBox { id: showNetwork; text: i18n("Network") }
 

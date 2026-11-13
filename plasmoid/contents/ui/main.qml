@@ -33,8 +33,31 @@ PlasmoidItem {
     // GPUs: ksystemstats numbers them gpu0, gpu1, ... Sensors load
     // asynchronously, so a slot counts once its name sensor has a value.
     readonly property int maxGpus: 4
-    // Sensor slots of the GPUs present, ordered like the treetop app
-    // (most VRAM first), so "GPU1" means the same card everywhere.
+    // Which DRM cards drive a connected display (ksystemstats' gpuN is
+    // cardN). Re-read now and then, for monitor hotplugs.
+    property var displayCards: []
+    P5Support.DataSource {
+        id: displayProbe
+        engine: "executable"
+        connectedSources: []
+        onNewData: (source, data) => {
+            const cards = []
+            for (const line of String(data.stdout || "").split("\n")) {
+                const m = line.match(/\/card(\d+)-[^/]+\/status:connected$/)
+                if (m && cards.indexOf(Number(m[1])) < 0) cards.push(Number(m[1]))
+            }
+            root.displayCards = cards
+            disconnectSource(source)
+        }
+    }
+    Timer {
+        interval: 30000; running: true; repeat: true; triggeredOnStart: true
+        onTriggered: displayProbe.connectSource("grep -H . /sys/class/drm/card*-*/status")
+    }
+
+    // Sensor slots of the GPUs present, ordered like the treetop app: the
+    // one driving the display first, then by VRAM. "GPU1" is the same card
+    // everywhere.
     readonly property var gpuPresent: {
         tick
         const out = []
@@ -43,13 +66,22 @@ PlasmoidItem {
             if (g && g.name.value !== undefined && String(g.name.value).length > 0) out.push(i)
         }
         const vram = (i) => Number(gpuSensors.objectAt(i).vramTotal.value) || 0
-        return out.sort((a, b) => vram(b) - vram(a))
+        const disp = (i) => displayCards.indexOf(i) >= 0 ? 1 : 0
+        return out.sort((a, b) => (disp(b) - disp(a)) || (vram(b) - vram(a)))
+    }
+    // Idle for the last ~30 samples and not driving a display: folded away.
+    function gpuIdle(slot) {
+        if (!cfg.hideIdleGpus || displayCards.indexOf(slot) >= 0) return false
+        const g = gpuSensors.objectAt(slot)
+        if (!g || g.hist.length < 20) return false
+        const vram = (Number(g.usedVram.value) || 0) / Math.max(1, Number(g.vramTotal.value) || 0)
+        return Math.max(...g.hist) < 0.03 && vram < 0.1
     }
     readonly property int gpuCount: gpuPresent.length
     // Display number (1-based) of a sensor slot.
     function gpuNumber(slot) { return gpuPresent.indexOf(slot) + 1 }
     // hiddenGpus holds display positions ("0" = GPU1).
-    readonly property var gpuIndexes: cfg.showGpu ? gpuPresent.filter((slot, k) => cfg.hiddenGpus.indexOf(String(k)) < 0) : []
+    readonly property var gpuIndexes: cfg.showGpu ? gpuPresent.filter((slot, k) => cfg.hiddenGpus.indexOf(String(k)) < 0 && !gpuIdle(slot)) : []
     Instantiator {
         id: gpuSensors
         model: root.maxGpus
