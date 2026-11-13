@@ -77,7 +77,7 @@ RowLayout {
             font.bold: true
             font.family: "monospace"
         }
-        // Graph (or disk fill) plus the value in the top corner.
+        // Graph (or disk fill) plus the value in the lower-left corner.
         Canvas {
             id: graph
             visible: !stat.bar || stat.inside
@@ -124,9 +124,11 @@ RowLayout {
                 // Light digits with a dark halo: readable over the fill and
                 // over the empty background alike.
                 ctx.font = "bold " + Math.round(stat.h * 0.3) + "px monospace"
-                ctx.textAlign = "right"
-                ctx.textBaseline = "top"
-                const x = w - 1, y = 0
+                // Lower left: over the oldest history, leaving the current end
+                // of the curve (the right edge) in view.
+                ctx.textAlign = "left"
+                ctx.textBaseline = "bottom"
+                const x = 1, y = hh + 1
                 const bg = Kirigami.Theme.backgroundColor
                 ctx.lineJoin = "round"
                 ctx.lineWidth = 3
