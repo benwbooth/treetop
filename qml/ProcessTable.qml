@@ -516,6 +516,15 @@ FocusScope {
             Layout.fillWidth: true
             implicitHeight: table.rowHeight + 3
             color: "#2e9e5b"
+            // Safety: hovering the header with no button down ends any drag
+            // whose release went missing.
+            MouseArea {
+                anchors.fill: parent
+                z: -1
+                hoverEnabled: true
+                acceptedButtons: Qt.NoButton
+                onPositionChanged: (m) => { if (table.dragKey && !(m.buttons & Qt.LeftButton)) table.dragKey = "" }
+            }
             // Where a dragged column will land.
             Rectangle {
                 z: 4
@@ -649,6 +658,8 @@ FocusScope {
                                 }
                             }
                             onCanceled: table.dragKey = ""
+                            // A cell rebuilt mid-drag never sees the release.
+                            Component.onDestruction: if (table.dragKey === modelData.key) table.dragKey = ""
                             onClicked: (mouse) => {
                                 if (dragged) return
                                 if (mouse.button === Qt.RightButton) {
@@ -1051,6 +1062,7 @@ FocusScope {
 
             Keys.onPressed: (event) => {
                 const t = event.text
+                if (event.key === Qt.Key_Escape && table.dragKey) { table.dragKey = ""; event.accepted = true; return }
                 if (event.key === Qt.Key_Space) {
                     if (table.currentPid > 0) {
                         const tg = Object.assign({}, table.tagged)
