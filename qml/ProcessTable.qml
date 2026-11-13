@@ -37,7 +37,15 @@ FocusScope {
     property real restoreY: 0
     property real restoreX: 0
     property bool restored: false
-    readonly property real scrollY: list.contentY
+    // Scroll position relative to the list's origin. A ListView's scroll
+    // range doesn't always start at 0 (originY moves as the model changes),
+    // and treating 0 as the top parked the view where no rows exist.
+    readonly property real scrollY: list.contentY - list.originY
+    function relY() { return list.contentY - list.originY }
+    function setRelY(y) {
+        const maxY = Math.max(0, rows.count * rowHeight - list.height)
+        list.contentY = list.originY + Math.max(0, Math.min(maxY, y))
+    }
     readonly property real scrollX: list.contentX
     signal scrollMoved()
     function toggleFocus(pid) {
@@ -350,8 +358,8 @@ FocusScope {
         if (reveal) {
             // Scroll only as far as needed to show it.
             const y = i * rowHeight
-            if (y < list.contentY) list.contentY = y
-            else if (y + rowHeight > list.contentY + list.height) list.contentY = y + rowHeight - list.height
+            if (y < relY()) setRelY(y)
+            else if (y + rowHeight > relY() + list.height) setRelY(y + rowHeight - list.height)
         }
     }
     readonly property bool userScrolling: list.moving || list.flicking || ksV.active || ksH.active
@@ -362,7 +370,7 @@ FocusScope {
             // First rows: put back the selection and scroll from last time.
             const i = keys.indexOf(restoreKey)
             if (i >= 0) select(i, false)
-            list.contentY = list.clampY(restoreY)
+            setRelY(restoreY)
             list.contentX = list.clampX(restoreX)
             restored = true
         }
@@ -372,14 +380,15 @@ FocusScope {
         // screen, otherwise the top visible row. It stays put on screen
         // when rows above it come or go. Nothing moves while you scroll.
         const scrolling = userScrolling
-        const atTop = list.contentY <= 0
+        const ry = relY()
+        const atTop = ry <= 0
         let anchorKey = "", offset = 0
         if (!scrolling && !atTop) {
             const sel = keys.indexOf(currentKey)
-            const selOffset = sel >= 0 ? sel * rowHeight - list.contentY : -1
-            const top = Math.max(0, Math.min(keys.length - 1, Math.floor(list.contentY / rowHeight)))
+            const selOffset = sel >= 0 ? sel * rowHeight - ry : -1
+            const top = Math.max(0, Math.min(keys.length - 1, Math.floor(ry / rowHeight)))
             if (selOffset >= 0 && selOffset < list.height) { anchorKey = currentKey; offset = selOffset }
-            else if (keys.length) { anchorKey = keys[top]; offset = top * rowHeight - list.contentY }
+            else if (keys.length) { anchorKey = keys[top]; offset = top * rowHeight - ry }
         }
         const oldSel = keys.indexOf(currentKey)
 
@@ -401,14 +410,26 @@ FocusScope {
             select(Math.min(Math.max(0, oldSel), d.count - 1), false)
         }
         if (atTop && !scrolling) {
-            list.contentY = 0
+            setRelY(0)
         } else if (anchorKey !== "") {
             const i = k.indexOf(anchorKey)
-            if (i >= 0) {
-                const maxY = Math.max(0, rows.count * rowHeight - list.height)
-                const y = Math.max(0, Math.min(maxY, i * rowHeight - offset))
-                if (Math.abs(y - list.contentY) > 0.5) list.contentY = y
-            }
+            if (i >= 0 && Math.abs(i * rowHeight - offset - relY()) > 0.5) setRelY(i * rowHeight - offset)
+        }
+    }
+
+    // Safety net: if the list ever shows no rows while it has some (view
+    // parked outside its content), lay it out again and go back to the
+    // selection. Logged, so a recurrence can be diagnosed.
+    Timer {
+        interval: 700; repeat: true; running: rows.count > 0
+        onTriggered: {
+            if (table.userScrolling || rows.count === 0) return
+            if (list.indexAt(10, list.contentY + 2) >= 0 || list.indexAt(10, list.contentY + list.height / 2) >= 0) return
+            console.warn("treetop: list showed no rows; contentY", list.contentY, "originY", list.originY,
+                         "contentHeight", list.contentHeight, "rows", rows.count, "— recovering")
+            list.forceLayout()
+            const i = Math.max(0, table.currentRow())
+            table.setRelY(i * table.rowHeight - list.height / 3)
         }
     }
 
@@ -997,7 +1018,7 @@ FocusScope {
                 } else if (event.key === Qt.Key_F9 || t === "k") {
                     const i = table.currentRow()
                     table.select(i, true)
-                    const p = list.mapToItem(table, list.width / 3, (i + 1) * table.rowHeight - list.contentY)
+                    const p = list.mapToItem(table, list.width / 3, (i + 1) * table.rowHeight - table.relY())
                     table.openMenu(p.x, p.y)
                 } else if (event.key === Qt.Key_F7 || t === "]") {
                     table.renice(-1)
