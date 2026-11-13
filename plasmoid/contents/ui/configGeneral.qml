@@ -17,6 +17,8 @@ KCM.SimpleKCM {
     property string cfg_diskMode: "usage"
     property alias cfg_diskSensor: diskSensor.text
     property alias cfg_showNetwork: showNetwork.checked
+    property alias cfg_showTemps: showTemps.checked
+    property bool cfg_showTempsDefault
     property alias cfg_showGraphs: showGraphs.checked
     property alias cfg_colorLabels: colorLabels.checked
     property alias cfg_valuesInside: valuesInside.checked
@@ -54,6 +56,7 @@ KCM.SimpleKCM {
         QQC2.CheckBox { id: hideIdle; visible: showGpu.checked; text: i18n("   Hide GPUs that are idle (not the one driving the display)") }
         QQC2.CheckBox { id: showDisk; text: i18n("Disk") }
         QQC2.CheckBox { id: showNetwork; text: i18n("Network") }
+        QQC2.CheckBox { id: showTemps; text: i18n("Temperatures (CPU and GPU)") }
 
         Item { Kirigami.FormData.isSection: true }
 

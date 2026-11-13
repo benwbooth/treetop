@@ -137,7 +137,17 @@ PlasmoidItem {
         return (bytes < 10 && i > 0 ? bytes.toFixed(1) : bytes.toFixed(0)) + u[i]
     }
     // Same palette as the treetop app and the tray bars.
-    readonly property var palette: ({ cpu: "#43c96b", mem: "#d6b23e", gpu: "#c06fd8", vram: "#d070a8", disk: "#4fb3d9", net: "#4f8fe0" })
+    readonly property var palette: ({ cpu: "#43c96b", mem: "#d6b23e", gpu: "#c06fd8", vram: "#d070a8", disk: "#4fb3d9", net: "#4f8fe0", temp: "#e0894f" })
+    // CPU and main-GPU temperatures (°C), and a heat colour for them:
+    // green up to 60°, yellow to 80°, red above.
+    readonly property real cpuTempC: Number(cpuTemp.value) || 0
+    readonly property real gpuTempC: {
+        tick
+        const i = gpuIndexes.length ? gpuIndexes[0] : (gpuPresent.length ? gpuPresent[0] : -1)
+        const g = i >= 0 ? gpuSensors.objectAt(i) : null
+        return g ? Number(g.temp.value) || 0 : 0
+    }
+    function tempColor(t) { return t >= 80 ? "#e05a4f" : (t >= 60 ? "#e3c25a" : "#43c96b") }
     function pct(v) { return (Number(v) || 0).toFixed(0) + "%" }
     // Label for an item per the "labels" setting: full name, one letter, or none.
     function lbl(full, letter) { return (cfg.labels === "full" || cfg.labels === "vertical" || cfg.labels === "stacked") ? full : (cfg.labels === "none" ? "" : letter) }
@@ -428,6 +438,54 @@ PlasmoidItem {
                     spacing: -2
                     Text { text: "↑" + root.fmtRate(netUp.value); color: Kirigami.Theme.textColor; font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); renderType: Text.NativeRendering }
                     Text { text: "↓" + root.fmtRate(netDown.value); color: Kirigami.Theme.textColor; font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); renderType: Text.NativeRendering }
+                }
+            }
+            // Temperatures: CPU over GPU, each coloured by heat.
+            RowLayout {
+                visible: root.cfg.showTemps && (root.cpuTempC > 0 || root.gpuTempC > 0)
+                spacing: Math.round(compact.h * 0.08)
+                HoverHandler { onHoveredChanged: root.setHover("", hovered) }
+                Item {
+                    visible: root.lbl("TEMP", "T").length > 0
+                    Layout.alignment: Qt.AlignVCenter
+                    implicitWidth: root.slabels ? tempStacked.implicitWidth : (root.vlabels ? tempLabel.implicitHeight : tempLabel.implicitWidth)
+                    implicitHeight: root.slabels ? tempStacked.implicitHeight : (root.vlabels ? tempLabel.implicitWidth : tempLabel.implicitHeight)
+                    StackedLabel {
+                        id: tempStacked
+                        visible: root.slabels
+                        anchors.centerIn: parent
+                        text: "TEMP"
+                        h: compact.h
+                        color: root.cfg.colorLabels ? root.palette.temp : Kirigami.Theme.textColor
+                    }
+                    Text {
+                        id: tempLabel
+                        visible: !root.slabels
+                        anchors.centerIn: parent
+                        rotation: root.vlabels ? -90 : 0
+                        text: root.lbl("TEMP", "T")
+                        color: root.cfg.colorLabels ? root.palette.temp : Kirigami.Theme.textColor
+                        font.pixelSize: root.vlabels ? Math.max(6, Math.round(compact.h * 0.2)) : Math.max(7, Math.round(compact.h * 0.22))
+                        font.bold: true
+                        renderType: Text.NativeRendering
+                    }
+                }
+                Column {
+                    spacing: -2
+                    Text {
+                        visible: root.cpuTempC > 0
+                        text: "CPU " + root.cpuTempC.toFixed(0) + "°"
+                        color: root.tempColor(root.cpuTempC)
+                        font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); font.bold: true
+                        renderType: Text.NativeRendering
+                    }
+                    Text {
+                        visible: root.gpuTempC > 0
+                        text: "GPU " + root.gpuTempC.toFixed(0) + "°"
+                        color: root.tempColor(root.gpuTempC)
+                        font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); font.bold: true
+                        renderType: Text.NativeRendering
+                    }
                 }
             }
         }

@@ -15,6 +15,7 @@
     <entry name="diskMode" type="String"><default>usage</default></entry>
     <entry name="diskSensor" type="String"><default>disk/all/usedPercent</default></entry>
     <entry name="showNetwork" type="Bool"><default>true</default></entry>
+    <entry name="showTemps" type="Bool"><default>true</default></entry>
     <entry name="showGraphs" type="Bool"><default>true</default></entry>
     <entry name="colorLabels" type="Bool"><default>true</default></entry>
     <entry name="valuesInside" type="Bool"><default>true</default></entry>
