@@ -329,7 +329,7 @@ PlasmoidItem {
                         lineHeightMode: root.slabels ? Text.FixedHeight : Text.ProportionalHeight
                         lineHeight: root.slabels ? Math.floor(compact.h * 0.92 / 4) : 1
                         color: root.cfg.colorLabels ? root.palette.net : Kirigami.Theme.textColor
-                        font.pixelSize: root.slabels ? Math.max(5, Math.floor(compact.h * 0.92 / 4))
+                        font.pixelSize: root.slabels ? Math.max(5, Math.floor(compact.h * 0.92 / 4 * 0.8))
                             : (root.vlabels ? Math.max(6, Math.round(compact.h * 0.2)) : Math.max(7, Math.round(compact.h * 0.22)))
                         font.bold: true
                         renderType: Text.NativeRendering

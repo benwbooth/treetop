@@ -37,7 +37,7 @@ RowLayout {
         lineHeightMode: Text.FixedHeight
         lineHeight: Math.floor(stat.h * 0.92 / 4)
         color: stat.colorLabel ? stat.color : Kirigami.Theme.textColor
-        font.pixelSize: Math.max(5, Math.floor(stat.h * 0.92 / 4))
+        font.pixelSize: Math.max(5, Math.floor(stat.h * 0.92 / 4 * 0.8))
         font.bold: true
         renderType: Text.NativeRendering
     }
