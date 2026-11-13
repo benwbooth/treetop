@@ -194,7 +194,9 @@ FocusScope {
                 lines.push(indent + argHtml(t))
             }
         }
-        return "<span style='white-space:pre'>" + lines.join("<br>") + "</span>"
+        // Shell-style line continuations, barely visible.
+        const faint = Qt.rgba(textColor.r, textColor.g, textColor.b, 0.18)
+        return "<span style='white-space:pre'>" + lines.join("&nbsp;" + span(faint, "\\") + "<br>") + "</span>"
     }
 
     ListModel { id: rows }
@@ -204,11 +206,39 @@ FocusScope {
     onViewChanged: maxLineChars = 0
     onShortenStorePathsChanged: { maxLineChars = 0; clearSynCache() }
 
+    // The selection is our own (by process key), not ListView's
+    // currentIndex: setting that makes ListView scroll to the row, which
+    // yanked the view back while you scrolled elsewhere.
+    function currentRow() { return keys.indexOf(currentKey) }
+    function select(i, reveal) {
+        if (i < 0 || i >= rows.count) return
+        currentKey = keys[i]
+        currentPid = rows.get(i).pid
+        if (reveal) {
+            // Scroll only as far as needed to show it.
+            const y = i * rowHeight
+            if (y < list.contentY) list.contentY = y
+            else if (y + rowHeight > list.contentY + list.height) list.contentY = y + rowHeight - list.height
+        }
+    }
+    readonly property bool userScrolling: list.moving || list.flicking || wheelAnim.running || wheelAnimX.running
+        || flingTimer.running
+
     function applyDiff(d) {
-        // Where is the selected row on screen right now?
-        const oldIdx = keys.indexOf(currentKey)
-        const offset = oldIdx >= 0 ? oldIdx * rowHeight - list.contentY : -1
-        const wasVisible = offset >= 0 && offset < list.height
+        // Anchor on what you're looking at: the selected row if it's on
+        // screen, otherwise the top visible row. It stays put on screen
+        // when rows above it come or go. Nothing moves while you scroll.
+        const scrolling = userScrolling
+        const atTop = list.contentY <= 0
+        let anchorKey = "", offset = 0
+        if (!scrolling && !atTop) {
+            const sel = keys.indexOf(currentKey)
+            const selOffset = sel >= 0 ? sel * rowHeight - list.contentY : -1
+            const top = Math.max(0, Math.min(keys.length - 1, Math.floor(list.contentY / rowHeight)))
+            if (selOffset >= 0 && selOffset < list.height) { anchorKey = currentKey; offset = selOffset }
+            else if (keys.length) { anchorKey = keys[top]; offset = top * rowHeight - list.contentY }
+        }
+        const oldSel = keys.indexOf(currentKey)
 
         const k = keys
         let longest = maxLineChars
@@ -222,18 +252,20 @@ FocusScope {
         if (rows.count > d.count) rows.remove(d.count, rows.count - d.count)
         k.length = d.count
 
-        let idx = k.indexOf(currentKey)
-        if (idx < 0 && d.count > 0) {
-            // The selected process exited: stay on the same line.
-            idx = Math.min(Math.max(0, oldIdx), d.count - 1)
-            currentKey = k[idx]
-            currentPid = rows.get(idx).pid
+        if (d.count > 0 && (currentKey === "" || k.indexOf(currentKey) < 0)) {
+            // Nothing selected yet, or the selected process exited: take the
+            // row now on the same line (no scrolling).
+            select(Math.min(Math.max(0, oldSel), d.count - 1), false)
         }
-        if (idx >= 0 && list.currentIndex !== idx) list.currentIndex = idx
-        // Keep it at the same height on screen (rows above may have come or gone).
-        if (wasVisible && idx >= 0) {
-            const maxY = Math.max(0, rows.count * rowHeight - list.height)
-            list.contentY = Math.max(0, Math.min(maxY, idx * rowHeight - offset))
+        if (atTop && !scrolling) {
+            list.contentY = 0
+        } else if (anchorKey !== "") {
+            const i = k.indexOf(anchorKey)
+            if (i >= 0) {
+                const maxY = Math.max(0, rows.count * rowHeight - list.height)
+                const y = Math.max(0, Math.min(maxY, i * rowHeight - offset))
+                if (Math.abs(y - list.contentY) > 0.5) list.contentY = y
+            }
         }
     }
 
@@ -250,21 +282,21 @@ FocusScope {
     }
 
     function renice(delta) {
-        if (currentPid <= 0 || list.currentIndex < 0) return
-        const r = rows.get(list.currentIndex)
+        if (currentPid <= 0 || currentRow() < 0) return
+        const r = rows.get(currentRow())
         const nice = Math.max(-20, Math.min(19, r.ni + delta))
         notice(monitor.renice(selectedPids().join(","), nice))
     }
 
     function toggleCurrent() {
-        if (list.currentIndex < 0) return
-        const r = rows.get(list.currentIndex)
+        if (currentRow() < 0) return
+        const r = rows.get(currentRow())
         if (r.hasChildren) monitor.toggle(r.key)
     }
 
     function setCollapsed(collapsed) {
-        if (list.currentIndex < 0) return
-        const r = rows.get(list.currentIndex)
+        if (currentRow() < 0) return
+        const r = rows.get(currentRow())
         if (r.hasChildren && r.expanded === collapsed) monitor.toggle(r.key)
     }
 
@@ -374,8 +406,8 @@ FocusScope {
             reuseItems: true
             cacheBuffer: 400
             boundsBehavior: Flickable.StopAtBounds
-            highlightMoveDuration: 0
-            keyNavigationEnabled: true
+            highlightFollowsCurrentItem: false
+            keyNavigationEnabled: false
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
             ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
             // Rows are as wide as the longest command line, and scroll sideways.
@@ -472,13 +504,6 @@ FocusScope {
                     list.tpVelocityX = 0
                 }
             }
-            onCurrentIndexChanged: {
-                if (currentIndex >= 0 && currentIndex < rows.count) {
-                    const r = rows.get(currentIndex)
-                    table.currentKey = r.key
-                    table.currentPid = r.pid
-                }
-            }
 
             delegate: Rectangle {
                 id: rowItem
@@ -512,7 +537,7 @@ FocusScope {
                 required property string gpus
                 required property string gpuEngines
 
-                readonly property bool current: ListView.isCurrentItem
+                readonly property bool current: key === table.currentKey
                 readonly property bool isTagged: !!table.tagged[pid]
                 readonly property color fg: current ? table.highlightTextColor : (kernel ? table.dimColor : table.textColor)
                 readonly property color chip: container.length > 0 && container !== "Host" ? Qt.hsla(Fmt.hue(container), 0.6, 0.55, 1) : "transparent"
@@ -684,7 +709,7 @@ FocusScope {
                     z: -1
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onPressed: (mouse) => {
-                        list.currentIndex = rowItem.index
+                        table.select(rowItem.index, false)
                         list.forceActiveFocus()
                         if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ControlModifier) && rowItem.pid > 0) {
                             const t = Object.assign({}, table.tagged)
@@ -713,7 +738,7 @@ FocusScope {
                         if (tg[table.currentPid]) delete tg[table.currentPid]; else tg[table.currentPid] = true
                         table.tagged = tg
                     }
-                    list.incrementCurrentIndex()
+                    table.select(table.currentRow() + 1, true)
                 } else if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Right) {
                     list.glideX(table.cw * 8)
                 } else if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Left) {
@@ -727,8 +752,9 @@ FocusScope {
                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                     if (table.currentPid > 0) table.showDetails(table.currentPid); else table.toggleCurrent()
                 } else if (event.key === Qt.Key_F9 || t === "k") {
-                    const it = list.currentItem
-                    const p = it ? it.mapToItem(table, it.width / 3, it.height) : Qt.point(0, 0)
+                    const i = table.currentRow()
+                    table.select(i, true)
+                    const p = list.mapToItem(table, list.width / 3, (i + 1) * table.rowHeight - list.contentY)
                     table.openMenu(p.x, p.y)
                 } else if (event.key === Qt.Key_F7 || t === "]") {
                     table.renice(-1)
@@ -736,14 +762,18 @@ FocusScope {
                     table.renice(1)
                 } else if (t === "U") {
                     table.tagged = ({})
+                } else if (event.key === Qt.Key_Down) {
+                    table.select(Math.min(rows.count - 1, table.currentRow() + 1), true)
+                } else if (event.key === Qt.Key_Up) {
+                    table.select(Math.max(0, table.currentRow() - 1), true)
                 } else if (event.key === Qt.Key_Home) {
-                    list.currentIndex = 0
+                    table.select(0, true)
                 } else if (event.key === Qt.Key_End) {
-                    list.currentIndex = rows.count - 1
+                    table.select(rows.count - 1, true)
                 } else if (event.key === Qt.Key_PageDown) {
-                    list.currentIndex = Math.min(rows.count - 1, list.currentIndex + Math.floor(list.height / table.rowHeight))
+                    table.select(Math.min(rows.count - 1, table.currentRow() + Math.floor(list.height / table.rowHeight)), true)
                 } else if (event.key === Qt.Key_PageUp) {
-                    list.currentIndex = Math.max(0, list.currentIndex - Math.floor(list.height / table.rowHeight))
+                    table.select(Math.max(0, table.currentRow() - Math.floor(list.height / table.rowHeight)), true)
                 } else if (!(table.letterHandler && t.length === 1 && table.letterHandler(t))) {
                     return
                 }
