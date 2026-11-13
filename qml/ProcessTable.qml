@@ -244,7 +244,7 @@ FocusScope {
         }
     }
     readonly property bool userScrolling: list.moving || list.flicking || wheelAnim.running || wheelAnimX.running
-        || flingTimer.running
+        || flingTimer.running || coast.running
 
     function applyDiff(d) {
         // Anchor on what you're looking at: the selected row if it's on
@@ -491,7 +491,7 @@ FocusScope {
                     if (ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0) {
                         // Touchpad: follow the fingers on both axes and remember
                         // the speed, so lifting them keeps it coasting.
-                        wheelAnim.stop(); wheelAnimX.stop()
+                        wheelAnim.stop(); wheelAnimX.stop(); coast.stop()
                         list.cancelFlick()
                         const dx = -ev.pixelDelta.x * list.touchGain, dy = -ev.pixelDelta.y * list.touchGain
                         const dt = Math.max(1, now - list.tpLast)
@@ -502,11 +502,13 @@ FocusScope {
                         if (dy !== 0) list.contentY = list.clampY(list.contentY + dy)
                         flingTimer.restart()
                     } else if (ev.angleDelta.x !== 0 || ((ev.modifiers & Qt.ShiftModifier) && ev.angleDelta.y !== 0)) {
+                        coast.stop()
                         // Tilt wheel or Shift+wheel: glide sideways.
                         const d = ev.angleDelta.x !== 0 ? ev.angleDelta.x : ev.angleDelta.y
                         list.lastWheel = now
                         list.glideX(-d / 120 * table.cw * 10 * fast)
                     } else if (ev.angleDelta.y !== 0) {
+                        coast.stop()
                         if (!wheelAnim.running) list.wheelTarget = list.contentY
                         list.lastWheel = now
                         list.wheelTarget = list.clampY(list.wheelTarget - ev.angleDelta.y / 120 * table.rowHeight * list.wheelRows * fast)
@@ -524,11 +526,36 @@ FocusScope {
                 id: flingTimer
                 interval: 40
                 onTriggered: {
-                    const vx = Math.abs(list.tpVelocityX) > 150 ? -list.tpVelocityX * 1.3 : 0
-                    const vy = Math.abs(list.tpVelocity) > 150 ? -list.tpVelocity * 1.3 : 0
-                    if (vx !== 0 || vy !== 0) list.flick(vx, vy)
+                    coast.vx = Math.abs(list.tpVelocityX) > 120 ? list.tpVelocityX * 1.2 : 0
+                    coast.vy = Math.abs(list.tpVelocity) > 120 ? list.tpVelocity * 1.2 : 0
+                    if (coast.vx !== 0 || coast.vy !== 0) coast.start()
                     list.tpVelocity = 0
                     list.tpVelocityX = 0
+                }
+            }
+            // Kinetic coasting after a touchpad swipe, on both axes, stepped
+            // every frame with exponential decay (Qt's flick() only coasts
+            // reliably along a ListView's own axis).
+            FrameAnimation {
+                id: coast
+                property real vx: 0
+                property real vy: 0
+                onTriggered: {
+                    const dt = Math.min(0.05, frameTime)
+                    const decay = Math.exp(-dt / 0.45)
+                    if (vx !== 0) {
+                        const x = list.clampX(list.contentX + vx * dt)
+                        if (x === list.contentX) vx = 0; else list.contentX = x
+                        vx *= decay
+                        if (Math.abs(vx) < 12) vx = 0
+                    }
+                    if (vy !== 0) {
+                        const y = list.clampY(list.contentY + vy * dt)
+                        if (y === list.contentY) vy = 0; else list.contentY = y
+                        vy *= decay
+                        if (Math.abs(vy) < 12) vy = 0
+                    }
+                    if (vx === 0 && vy === 0) stop()
                 }
             }
 
