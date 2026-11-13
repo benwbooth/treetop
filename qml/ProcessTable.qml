@@ -889,6 +889,13 @@ FocusScope {
             }
         }
         MenuSeparator {}
+        MenuItem {
+            text: table.focusPid > 0 && table.focusPid === table.currentPid ? "Show all processes (f)" : "Focus on this process tree (f)"
+            icon.name: "zoom-select"
+            enabled: table.currentPid > 0
+            onTriggered: table.toggleFocus(table.currentPid)
+        }
+        MenuSeparator {}
         MenuItem { text: "Terminate (SIGTERM)"; icon.name: "process-stop"; onTriggered: table.signalSelected(15) }
         MenuItem { text: "Kill (SIGKILL)"; icon.name: "edit-delete"; onTriggered: table.signalSelected(9) }
         MenuItem { text: "Stop (SIGSTOP)"; icon.name: "media-playback-pause"; onTriggered: table.signalSelected(19) }
@@ -904,12 +911,6 @@ FocusScope {
         MenuItem { text: "Nice +1 (lower priority)"; onTriggered: table.renice(1) }
         MenuItem { text: "Nice −1 (higher priority)"; onTriggered: table.renice(-1) }
         MenuSeparator {}
-        MenuItem {
-            text: table.focusPid > 0 && table.focusPid === table.currentPid ? "Show all processes (f)" : "Focus on this process tree (f)"
-            icon.name: "zoom-select"
-            enabled: table.currentPid > 0
-            onTriggered: table.toggleFocus(table.currentPid)
-        }
         MenuItem { text: "Details… (Enter)"; icon.name: "documentinfo"; enabled: table.currentPid > 0; onTriggered: table.showDetails(table.currentPid) }
         MenuItem { text: "Collapse / expand"; onTriggered: table.toggleCurrent() }
         MenuItem { text: "Expand all"; onTriggered: table.monitor.set_expanded_all(true) }
