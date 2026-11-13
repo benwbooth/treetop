@@ -171,7 +171,7 @@ PlasmoidItem {
         hoverEnabled: true
         onClicked: root.toggleTreetop()
 
-        // Tray look: four live bars (CPU, memory, GPU, network) in the icon.
+        // Tray look: five live bars (CPU, memory, GPU, VRAM, network).
         Row {
             visible: root.inTray
             anchors.centerIn: parent
@@ -180,22 +180,24 @@ PlasmoidItem {
             height: s
             spacing: Math.max(1, s * 0.06)
             Repeater {
-                model: 4
+                model: 5
                 Item {
-                    readonly property color c: [root.palette.cpu, root.palette.mem, root.palette.gpu, root.palette.net][index]
+                    readonly property color c: [root.palette.cpu, root.palette.mem, root.palette.gpu, root.palette.vram, root.palette.net][index]
                     readonly property real v: {
                         root.tick
                         if (index === 0) return cpu.value / 100
                         if (index === 1) return mem.value / 100
-                        if (index === 2) {
+                        if (index === 2 || index === 3) {
                             // GPU1, the main card (most VRAM), like the panel strip.
                             const i = root.gpuIndexes.length ? root.gpuIndexes[0] : (root.gpuPresent.length ? root.gpuPresent[0] : -1)
                             const g = i >= 0 ? gpuSensors.objectAt(i) : null
-                            return g ? g.usage.value / 100 : 0
+                            if (!g) return 0
+                            return index === 2 ? g.usage.value / 100
+                                : (Number(g.usedVram.value) || 0) / Math.max(1, Number(g.vramTotal.value) || 0)
                         }
                         return (Number(netDown.value) + Number(netUp.value)) / root.peakNet
                     }
-                    width: (parent.s - parent.spacing * 3) / 4
+                    width: (parent.s - parent.spacing * 4) / 5
                     height: parent.s
                     Rectangle {
                         anchors.fill: parent
