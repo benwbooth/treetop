@@ -1182,9 +1182,15 @@ ApplicationWindow {
                                 Label { id: k; text: modelData[0]; color: win.dimColor; width: 140 }
                                 TextEdit {
                                     id: v
+                                    readonly property bool isCommand: modelData[0] === "Command"
                                     x: 150
                                     width: parent.width - 150
-                                    text: modelData[1] === undefined || modelData[1] === null ? "" : String(modelData[1])
+                                    // The command reads as in its tooltip: full path, one
+                                    // argument per line, coloured.
+                                    textFormat: isCommand ? TextEdit.RichText : TextEdit.PlainText
+                                    text: isCommand
+                                        ? "<span style='font-family:" + win.mono.family + "'>" + table.prettyCommand(details.info.command || "", details.info.exe || "") + "</span>"
+                                        : (modelData[1] === undefined || modelData[1] === null ? "" : String(modelData[1]))
                                     readOnly: true
                                     selectByMouse: true
                                     wrapMode: TextEdit.WrapAnywhere
