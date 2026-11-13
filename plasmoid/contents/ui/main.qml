@@ -236,7 +236,7 @@ PlasmoidItem {
         return t
     }
 
-    toolTipMainText: hoverKind ? kindTitle[hoverKind] + " — top programs" : "treetop"
+    toolTipMainText: !hoverKind ? "treetop" : (hoverKind === "temp" ? kindTitle.temp : kindTitle[hoverKind] + " — top programs")
     toolTipTextFormat: Text.RichText
     toolTipSubText: hoverKind ? topText(hoverKind) : summaryText
     // Our own tooltip content: Plasma's default one caps the number of

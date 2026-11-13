@@ -1,6 +1,7 @@
 mod actions;
 mod autostart;
 mod containers;
+mod cooling;
 mod gpu;
 mod root;
 mod inspect;

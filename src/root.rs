@@ -26,6 +26,8 @@ pub struct RootData {
     pub gpu: HashMap<i32, Vec<gpu::GpuUse>>,
     /// Per-process network rates (rx, tx) in bytes/s, from packet headers.
     pub net: HashMap<i32, (f64, f64)>,
+    /// liquidctl sensors read as root (reaches root-only coolers).
+    pub cooling: Vec<Value>,
 }
 
 impl RootData {
@@ -46,6 +48,7 @@ impl RootData {
                 }
             }
         }
+        d.cooling = v["cooling"].as_array().cloned().unwrap_or_default();
         let secs = v["netSecs"].as_f64().unwrap_or(1.0).max(0.05);
         if let Some(m) = v["net"].as_object() {
             for (k, x) in m {
@@ -156,6 +159,7 @@ fn socket_path(uid: u32) -> std::path::PathBuf {
 
 struct HelperState {
     gpu: gpu::Shared,
+    cooling: crate::cooling::Shared,
     net: crate::net::NetAccounting,
     last: std::time::Instant,
 }
@@ -168,7 +172,11 @@ fn serve(input: impl BufRead, mut out: impl Write, st: &mut HelperState) {
         let Ok(line) = line else { break };
         let parts: Vec<&str> = line.split_whitespace().collect();
         let reply = match parts.first().copied() {
-            Some("sample") => sample(&st.gpu, &mut st.net, &mut st.last),
+            Some("sample") => {
+                let mut v = sample(&st.gpu, &mut st.net, &mut st.last);
+                v["cooling"] = json!(*st.cooling.lock().unwrap());
+                v
+            }
             Some("inspect") => {
                 let pid = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
                 json!({"environ": inspect::environ(pid), "files": inspect::files(pid)})
@@ -206,6 +214,7 @@ fn peer_uid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
 pub fn helper_main() {
     let mut st = HelperState {
         gpu: gpu::spawn_poller(),
+        cooling: crate::cooling::spawn_poller(),
         net: crate::net::NetAccounting::start(),
         last: std::time::Instant::now(),
     };

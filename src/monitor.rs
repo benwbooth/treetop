@@ -93,6 +93,7 @@ use std::time::{Duration, Instant};
 
 struct State {
     system: System,
+    cooling: crate::cooling::Shared,
     procs: Processes,
     /// Rows as the UI currently has them (for diffing).
     shown: Vec<Value>,
@@ -124,6 +125,7 @@ impl Default for MonitorRust {
             shared: Arc::new(Shared {
                 state: Mutex::new(State {
                     system: System::new(),
+                    cooling: crate::cooling::spawn_poller(),
                     procs: { let mut p = Processes::new(); p.load_view(); p },
                     shown: Vec::new(),
                     rows_enabled: true,
@@ -207,6 +209,16 @@ impl cxx_qt::Initialize for qobject::Monitor {
                         let mut out = s.system.snapshot.clone();
                         for (i, e) in s.procs.gpu_engine_totals().into_iter().enumerate() {
                             out["gpus"][i]["engines"] = json!(e);
+                        }
+                        // liquidctl fans/pumps/liquid temps: the root helper's
+                        // (sees every device) when root access is on, else ours.
+                        let cooling = match s.procs.root.as_ref().map(|r| &r.cooling) {
+                            Some(c) if !c.is_empty() => c.clone(),
+                            _ => s.cooling.lock().unwrap().clone(),
+                        };
+                        if let Some(list) = out["sensors"].as_array_mut() {
+                            list.extend(cooling);
+                            list.extend(crate::cooling::lights_out());
                         }
                         out["procs"] = s.procs.summary();
                         out["top"] = s.procs.top();

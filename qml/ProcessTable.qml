@@ -183,9 +183,10 @@ FocusScope {
         case "vram": return vram > 0 ? Fmt.bytes(vram) : ""
         case "gpus": return gpus
         case "engines": return gpuEngines
-        case "ior": return ioR > 0 ? Fmt.bytes(ioR) : (ioR < 0 ? "" : "0")
-        case "iow": return ioW > 0 ? Fmt.bytes(ioW) : (ioW < 0 ? "" : "0")
-        case "net": return netRx < 0 ? "" : Fmt.bytes(netRx) + "/" + Fmt.bytes(netTx)
+        // Blank when idle (or unknown), so activity stands out.
+        case "ior": return ioR >= 1 ? Fmt.bytes(ioR) : ""
+        case "iow": return ioW >= 1 ? Fmt.bytes(ioW) : ""
+        case "net": return (netRx >= 1 || netTx >= 1) ? Fmt.bytes(netRx) + "/" + Fmt.bytes(netTx) : ""
         case "time": return group ? count + (count === 1 ? " proc" : " procs") : Fmt.cpuTime(time)
         case "container": return group ? "" : container
         }
