@@ -420,8 +420,25 @@ impl Processes {
         });
     }
 
-    /// Network rate of the process's container (0 for host processes).
+    /// (rx, tx) bytes/s for a row; -1 when unknown (no root access).
+    fn net_rates(&self, p: &Proc, container_root: bool) -> (f64, f64) {
+        if container_root {
+            if let Some(v) = p.container.as_ref().and_then(|id| self.cnet.get(id)) {
+                return *v;
+            }
+        }
+        match &self.root {
+            Some(r) if p.container.is_none() => r.net.get(&p.pid).copied().unwrap_or((0.0, 0.0)),
+            _ => (-1.0, -1.0),
+        }
+    }
+
+    /// Network rate used for sorting: the process's own (root access), else
+    /// its container's.
     fn net_of(&self, p: &Proc) -> f64 {
+        if let Some(v) = self.root.as_ref().and_then(|r| r.net.get(&p.pid)) {
+            return v.0 + v.1;
+        }
         p.container.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.0 + v.1).unwrap_or(0.0)
     }
 
@@ -476,10 +493,10 @@ impl Processes {
             "gpu": p.gpu, "vram": p.vram as f64, "gtt": p.gtt as f64, "gpus": p.gpus,
             "gpuEngines": p.gpu_engines.iter().map(|v| format!("{v:.0}")).collect::<Vec<_>>().join("/"),
             "ioR": p.io_r, "ioW": p.io_w,
-            // Network is only known per container (network namespace); shown
-            // on the container's first process.
-            "netRx": if container_root { p.container.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.0).unwrap_or(-1.0) } else { -1.0 },
-            "netTx": if container_root { p.container.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.1).unwrap_or(-1.0) } else { -1.0 },
+            // Network: per process with root access (measured from packet
+            // headers); otherwise per container on its first process.
+            "netRx": self.net_rates(p, container_root).0,
+            "netTx": self.net_rates(p, container_root).1,
         })
     }
 

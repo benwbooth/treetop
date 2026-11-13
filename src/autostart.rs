@@ -45,6 +45,15 @@ fn launch_command() -> String {
         .unwrap_or_else(|| "treetop".into())
 }
 
+/// Whether the treetop widget is enabled in a Plasma system tray (then the
+/// app doesn't need a tray icon of its own).
+pub fn tray_widget_present() -> bool {
+    let rc = config_home().join("plasma-org.kde.plasma.desktop-appletsrc");
+    std::fs::read_to_string(rc)
+        .map(|t| t.lines().any(|l| l.starts_with("extraItems=") && l.split(['=', ',']).any(|i| i == "com.benwbooth.treetop")))
+        .unwrap_or(false)
+}
+
 pub fn enabled() -> bool {
     std::fs::read_to_string(entry_path())
         .map(|t| !t.lines().any(|l| l.trim() == "Hidden=true"))

@@ -2,7 +2,9 @@
 //! pkexec, answers line-based requests on stdin/stdout:
 //!
 //!   sample               -> {"io": {pid: [read, write]}, "exe": {pid: path},
-//!                            "gpu": {pid: [{pdev, vram, gtt, engines}]}}
+//!                            "gpu": {pid: [{pdev, vram, gtt, engines}]},
+//!                            "net": {pid: [rx, tx]} (bytes since last sample),
+//!                            "netSecs": seconds covered}
 //!   inspect <pid>        -> {"environ": ..., "files": ...}
 //!   signal <sig> <pid>.. -> {"ok": n, "errors": [...]}
 //!   renice <n> <pid>..   -> {"ok": n, "errors": [...]}
@@ -22,6 +24,8 @@ pub struct RootData {
     pub io: HashMap<i32, (u64, u64)>,
     pub exe: HashMap<i32, String>,
     pub gpu: HashMap<i32, Vec<gpu::GpuUse>>,
+    /// Per-process network rates (rx, tx) in bytes/s, from packet headers.
+    pub net: HashMap<i32, (f64, f64)>,
 }
 
 impl RootData {
@@ -39,6 +43,14 @@ impl RootData {
             for (k, x) in m {
                 if let (Some(p), Some(s)) = (pid(k), x.as_str()) {
                     d.exe.insert(p, s.to_string());
+                }
+            }
+        }
+        let secs = v["netSecs"].as_f64().unwrap_or(1.0).max(0.05);
+        if let Some(m) = v["net"].as_object() {
+            for (k, x) in m {
+                if let (Some(p), Some(r), Some(t)) = (pid(k), x[0].as_u64(), x[1].as_u64()) {
+                    d.net.insert(p, (r as f64 / secs, t as f64 / secs));
                 }
             }
         }
@@ -77,7 +89,7 @@ fn pids() -> Vec<i32> {
         .unwrap_or_default()
 }
 
-fn sample(gpu: &gpu::Shared) -> Value {
+fn sample(gpu: &gpu::Shared, net: &mut crate::net::NetAccounting, last: &mut std::time::Instant) -> Value {
     let mut io = Map::new();
     let mut exe = Map::new();
     for pid in pids() {
@@ -101,7 +113,10 @@ fn sample(gpu: &gpu::Shared) -> Value {
             (pid.to_string(), json!(list))
         })
         .collect();
-    json!({"io": io, "exe": exe, "gpu": gpu})
+    let secs = last.elapsed().as_secs_f64();
+    *last = std::time::Instant::now();
+    let netmap: Map<String, Value> = net.take().into_iter().map(|(p, (r, t))| (p.to_string(), json!([r, t]))).collect();
+    json!({"io": io, "exe": exe, "gpu": gpu, "net": netmap, "netSecs": secs})
 }
 
 fn act(cmd: &str, rest: &[&str]) -> Value {
@@ -132,6 +147,8 @@ fn act(cmd: &str, rest: &[&str]) -> Value {
 /// `treetop --root-helper`: the loop that runs as root.
 pub fn helper_main() {
     let gpu = gpu::spawn_poller();
+    let mut net = crate::net::NetAccounting::start();
+    let mut last = std::time::Instant::now();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let _ = writeln!(out, "ready");
@@ -140,7 +157,7 @@ pub fn helper_main() {
         let Ok(line) = line else { break };
         let parts: Vec<&str> = line.split_whitespace().collect();
         let reply = match parts.first().copied() {
-            Some("sample") => sample(&gpu),
+            Some("sample") => sample(&gpu, &mut net, &mut last),
             Some("inspect") => {
                 let pid = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
                 json!({"environ": inspect::environ(pid), "files": inspect::files(pid)})

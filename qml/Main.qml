@@ -134,6 +134,7 @@ ApplicationWindow {
         // alive (devloop rebuild) restores the window instead of hiding it.
         property real lastAlive: 0
         property bool lastVisible: true
+        property bool ownTrayIcon: false
         property string collapsedSections: ""
         property alias winWidth: win.width
         property alias winHeight: win.height
@@ -238,7 +239,8 @@ ApplicationWindow {
         if (win.visible && win.active) win.hide(); else showWindow()
     }
     onClosing: (close) => {
-        if (tray.available) { close.accepted = false; win.hide() }
+        // Closing hides to the tray (our icon or the tray widget).
+        if (tray.available || win.widgetInTray) { close.accepted = false; win.hide() }
     }
 
     readonly property string summary: {
@@ -251,9 +253,15 @@ ApplicationWindow {
         return t
     }
 
+    // The treetop widget in the Plasma tray replaces the app's own icon.
+    property bool widgetInTray: false
+    Timer {
+        interval: 15000; running: true; repeat: true; triggeredOnStart: true
+        onTriggered: win.widgetInTray = mon.tray_widget_present()
+    }
     Platform.SystemTrayIcon {
         id: tray
-        visible: available
+        visible: available && (!win.widgetInTray || settings.ownTrayIcon)
         icon.source: Qt.resolvedUrl("treetop.svg")
         tooltip: win.summary
         onActivated: (reason) => {
@@ -383,6 +391,14 @@ ApplicationWindow {
                     Menu {
                         id: optionsMenu
                         MenuItem { text: "Start at login (in the tray)"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
+                        MenuItem {
+                            text: "Separate tray icon (besides the tray widget)"
+                            visible: win.widgetInTray
+                            height: visible ? implicitHeight : 0
+                            checkable: true
+                            checked: settings.ownTrayIcon
+                            onTriggered: settings.ownTrayIcon = !settings.ownTrayIcon
+                        }
                         MenuItem {
                             text: win.snap.rootStarting ? "Root access (waiting for polkit…)" : "Root access (polkit)"
                             checkable: true

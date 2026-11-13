@@ -5,6 +5,7 @@ mod gpu;
 mod root;
 mod inspect;
 mod monitor;
+mod net;
 mod processes;
 mod system;
 

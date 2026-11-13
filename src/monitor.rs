@@ -70,6 +70,8 @@ pub mod qobject {
         #[qinvokable]
         fn autostart_enabled(self: &Monitor) -> bool;
         #[qinvokable]
+        fn tray_widget_present(self: &Monitor) -> bool;
+        #[qinvokable]
         fn set_autostart(self: &Monitor, on: bool) -> QString;
     }
 
@@ -365,6 +367,10 @@ impl qobject::Monitor {
 
     fn renice(&self, pids: &QString, nice: i32) -> QString {
         QString::from(&self.actions.renice(&pid_list(pids), nice))
+    }
+
+    fn tray_widget_present(&self) -> bool {
+        crate::autostart::tray_widget_present()
     }
 
     fn autostart_enabled(&self) -> bool {

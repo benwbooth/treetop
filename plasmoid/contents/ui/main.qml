@@ -148,18 +148,58 @@ PlasmoidItem {
         Plasmoid.configuration.hiddenGpus = h
     }
 
+    // Inside the system tray the widget gets an icon-sized slot.
+    readonly property bool inTray: Plasmoid.containment !== null
+        && String(Plasmoid.containment.pluginName).indexOf("systemtray") >= 0
+
     compactRepresentation: MouseArea {
         id: compact
         readonly property bool vertical: Plasmoid.formFactor === PlasmaCore.Types.Vertical
-        Layout.minimumWidth: vertical ? -1 : grid.implicitWidth
-        Layout.preferredWidth: vertical ? -1 : grid.implicitWidth
-        Layout.minimumHeight: vertical ? grid.implicitHeight : -1
-        Layout.preferredHeight: vertical ? grid.implicitHeight : -1
+        Layout.minimumWidth: root.inTray ? -1 : (vertical ? -1 : grid.implicitWidth)
+        Layout.preferredWidth: root.inTray ? -1 : (vertical ? -1 : grid.implicitWidth)
+        Layout.minimumHeight: root.inTray ? -1 : (vertical ? grid.implicitHeight : -1)
+        Layout.preferredHeight: root.inTray ? -1 : (vertical ? grid.implicitHeight : -1)
         hoverEnabled: true
         onClicked: root.toggleTreetop()
 
+        // Tray look: four live bars (CPU, memory, GPU, network) in the icon.
+        Row {
+            visible: root.inTray
+            anchors.centerIn: parent
+            readonly property real s: Math.min(compact.width, compact.height)
+            width: s
+            height: s
+            spacing: Math.max(1, s * 0.06)
+            Repeater {
+                model: [
+                    { c: "#43c96b", v: () => cpu.value / 100 },
+                    { c: "#d6b23e", v: () => mem.value / 100 },
+                    { c: "#c06fd8", v: () => { const i = root.gpuIndexes.length ? root.gpuIndexes[root.gpuIndexes.length - 1] : -1; const g = i >= 0 ? gpuSensors.objectAt(i) : null; return g ? g.usage.value / 100 : 0 } },
+                    { c: "#4f8fe0", v: () => (Number(netDown.value) + Number(netUp.value)) / root.peakNet },
+                ]
+                Item {
+                    required property var modelData
+                    width: (parent.s - parent.spacing * 3) / 4
+                    height: parent.s
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 1
+                        color: Qt.rgba(Kirigami.Theme.textColor.r, Kirigami.Theme.textColor.g, Kirigami.Theme.textColor.b, 0.15)
+                    }
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        radius: 1
+                        color: modelData.c
+                        height: { root.tick; return Math.max(1, Math.min(1, modelData.v() || 0) * parent.height) }
+                    }
+                }
+            }
+        }
+
         GridLayout {
             id: grid
+            visible: !root.inTray
             anchors.fill: parent
             flow: compact.vertical ? GridLayout.TopToBottom : GridLayout.LeftToRight
             rows: compact.vertical ? -1 : 1

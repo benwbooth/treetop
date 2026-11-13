@@ -98,9 +98,9 @@ FocusScope {
         hiddenColumns = h
     }
 
-    // /nix/store/<32-char hash>-name -> /nix/store/<first 6>…-name: short,
+    // /nix/store/<32-char hash>-name -> /nix/store/<first 5>…-name: short,
     // but different builds of the same package stay distinguishable.
-    readonly property var storeHash: /\/nix\/store\/([0-9a-df-np-sv-z]{6})[0-9a-df-np-sv-z]{26}-/g
+    readonly property var storeHash: /\/nix\/store\/([0-9a-df-np-sv-z]{5})[0-9a-df-np-sv-z]{27}-/g
     function tidy(s) {
         return shortenStorePaths ? s.replace(storeHash, "/nix/store/$1…-") : s
     }
@@ -524,15 +524,26 @@ FocusScope {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 onWheel: (ev) => {
                     const now = Date.now()
+                    // Touchpads: pixel deltas, a touchpad device, or angles that
+                    // aren't whole wheel notches (high-resolution scrolling).
+                    const touch = ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0
+                        || (ev.device && ev.device.type === PointerDevice.TouchPad)
+                        || (ev.angleDelta.x % 120 !== 0) || (ev.angleDelta.y % 120 !== 0)
+                    if (now - list.tpLast > 400 && now - list.lastWheel > 400)
+                        console.log("treetop scroll start: device", ev.device ? ev.device.type : "?", "pixel", ev.pixelDelta.x, ev.pixelDelta.y,
+                                    "angle", ev.angleDelta.x, ev.angleDelta.y, "phase", ev.phase, "touch", touch)
                     // Spinning the wheel quickly accelerates (up to ~4x).
                     const gapMs = now - list.lastWheel
                     const fast = gapMs < 40 ? 4 : (gapMs < 80 ? 2.8 : (gapMs < 160 ? 1.7 : 1))
-                    if (ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0) {
+                    if (touch && (ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0 || ev.angleDelta.x !== 0 || ev.angleDelta.y !== 0)) {
                         // Touchpad: follow the fingers on both axes and remember
                         // the speed, so lifting them keeps it coasting.
                         wheelAnim.stop(); wheelAnimX.stop(); coast.stop()
                         list.cancelFlick()
-                        const dx = -ev.pixelDelta.x * list.touchGain, dy = -ev.pixelDelta.y * list.touchGain
+                        // Pixel deltas when given; else angles (1/8 degree; ~1px each).
+                        const px = ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0
+                        const dx = -(px ? ev.pixelDelta.x : ev.angleDelta.x / 2) * list.touchGain
+                        const dy = -(px ? ev.pixelDelta.y : ev.angleDelta.y / 2) * list.touchGain
                         const dt = Math.max(1, now - list.tpLast)
                         list.tpVelocityX = list.tpVelocityX * 0.6 + (dx / dt * 1000) * 0.4
                         list.tpVelocity = list.tpVelocity * 0.6 + (dy / dt * 1000) * 0.4
