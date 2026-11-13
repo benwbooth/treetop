@@ -35,6 +35,8 @@ ApplicationWindow {
     readonly property color cCyan: dark ? "#4fb3d9" : "#1b84ad"
     readonly property color cMagenta: dark ? "#c06fd8" : "#9440ae"
     readonly property color cOrange: dark ? "#e0894f" : "#c2621f"
+    // VRAM gets its own colour (pink), shared with the panel widget.
+    readonly property color cPink: dark ? "#d070a8" : "#a8407a"
     color: pal.window
 
     // ---- state -----------------------------------------------------------
@@ -766,7 +768,7 @@ ApplicationWindow {
                             label: "VRAM"
                             labelWidth: 5 * win.mono.pointSize
                             maximum: parent.g.vramTotal || 1
-                            segments: [{ value: parent.g.vramUsed || 0, color: win.cCyan }]
+                            segments: [{ value: parent.g.vramUsed || 0, color: win.cPink }]
                             text: Fmt.bytes(parent.g.vramUsed) + "/" + Fmt.bytes(parent.g.vramTotal)
                         }
                     }

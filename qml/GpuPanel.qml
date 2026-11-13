@@ -106,7 +106,7 @@ Rectangle {
                     Layout.fillWidth: true; font: panel.font; textColor: panel.textColor; trackColor: panel.trackColor
                     label: "VRAM"; labelWidth: 8 * panel.font.pointSize
                     maximum: panel.gpu.vramTotal || 1
-                    segments: [{ value: panel.gpu.vramUsed || 0, color: panel.memColor }]
+                    segments: [{ value: panel.gpu.vramUsed || 0, color: "#d070a8" }]
                     text: Fmt.bytes(panel.gpu.vramUsed) + "/" + Fmt.bytes(panel.gpu.vramTotal)
                 }
                 Meter {

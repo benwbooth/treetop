@@ -104,6 +104,8 @@ PlasmoidItem {
         while (bytes >= 1024 && i < 3) { bytes /= 1024; i++ }
         return (bytes < 10 && i > 0 ? bytes.toFixed(1) : bytes.toFixed(0)) + u[i]
     }
+    // Same palette as the treetop app and the tray bars.
+    readonly property var palette: ({ cpu: "#43c96b", mem: "#d6b23e", gpu: "#c06fd8", vram: "#d070a8", disk: "#4fb3d9", net: "#4f8fe0" })
     function pct(v) { return (Number(v) || 0).toFixed(0) + "%" }
     // Label for an item per the "labels" setting: full name, one letter, or none.
     function lbl(full, letter) { return (cfg.labels === "full" || cfg.labels === "vertical") ? full : (cfg.labels === "none" ? "" : letter) }
@@ -180,13 +182,14 @@ PlasmoidItem {
             Repeater {
                 model: 4
                 Item {
-                    readonly property color c: ["#43c96b", "#d6b23e", "#c06fd8", "#4f8fe0"][index]
+                    readonly property color c: [root.palette.cpu, root.palette.mem, root.palette.gpu, root.palette.net][index]
                     readonly property real v: {
                         root.tick
                         if (index === 0) return cpu.value / 100
                         if (index === 1) return mem.value / 100
                         if (index === 2) {
-                            const i = root.gpuIndexes.length ? root.gpuIndexes[root.gpuIndexes.length - 1] : -1
+                            // GPU1, the main card (most VRAM), like the panel strip.
+                            const i = root.gpuIndexes.length ? root.gpuIndexes[0] : (root.gpuPresent.length ? root.gpuPresent[0] : -1)
                             const g = i >= 0 ? gpuSensors.objectAt(i) : null
                             return g ? g.usage.value / 100 : 0
                         }
@@ -224,14 +227,14 @@ PlasmoidItem {
 
             KStat {
                 visible: root.cfg.showCpu
-                h: compact.h; label: root.lbl("CPU", "C"); color: "#43c96b"
+                h: compact.h; label: root.lbl("CPU", "C"); color: root.palette.cpu
                 value: (Number(cpu.value) || 0).toFixed(0) + "%"
                 history: root.hCpu
                 showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
             }
             KStat {
                 visible: root.cfg.showMemory
-                h: compact.h; label: root.lbl("MEM", "M"); color: "#4fb3d9"
+                h: compact.h; label: root.lbl("MEM", "M"); color: root.palette.mem
                 value: (Number(mem.value) || 0).toFixed(0) + "%"
                 history: root.hMem
                 showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
@@ -246,7 +249,7 @@ PlasmoidItem {
                     KStat {
                         h: compact.h
                         label: root.lbl("GPU", "G") + parent.n
-                        color: "#c06fd8"
+                        color: root.palette.gpu
                         value: parent.g ? (Number(parent.g.usage.value) || 0).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.hist : []
                         showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
@@ -256,7 +259,7 @@ PlasmoidItem {
                         visible: root.cfg.showVram
                         h: compact.h
                         label: root.lbl("VRAM", "V") + parent.n
-                        color: "#d070a8"
+                        color: root.palette.vram
                         value: parent.g ? ((Number(parent.g.usedVram.value) || 0) / Math.max(1, Number(parent.g.vramTotal.value) || 0) * 100).toFixed(0) + "%" : "–"
                         history: parent.g ? parent.g.vhist : []
                         showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels
@@ -265,7 +268,7 @@ PlasmoidItem {
             }
             KStat {
                 visible: root.cfg.showDisk
-                h: compact.h; label: root.lbl("DSK", "D"); color: "#e0894f"
+                h: compact.h; label: root.lbl("DSK", "D"); color: root.palette.disk
                 readonly property bool io: root.cfg.diskMode === "io"
                 value: io ? root.fmtRate(Number(diskR.value) + Number(diskW.value)) : (Number(diskUse.value) || 0).toFixed(0) + "%"
                 bar: !io
@@ -287,7 +290,7 @@ PlasmoidItem {
                         anchors.centerIn: parent
                         rotation: root.vlabels ? -90 : 0
                         text: root.lbl("NET", "N")
-                        color: root.cfg.colorLabels ? "#b07fe0" : Kirigami.Theme.textColor
+                        color: root.cfg.colorLabels ? root.palette.net : Kirigami.Theme.textColor
                         font.pixelSize: root.vlabels ? Math.max(6, Math.round(compact.h * 0.2)) : Math.max(7, Math.round(compact.h * 0.22))
                         font.bold: true
                         renderType: Text.NativeRendering
