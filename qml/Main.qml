@@ -354,6 +354,19 @@ ApplicationWindow {
                 }
                 CheckBox { text: "Kernel threads"; checked: settings.showKernel; onToggled: { settings.showKernel = checked; mon.set_show_kernel(checked); table.refreshRows() } }
                 Item { Layout.fillWidth: true }
+                ToolButton {
+                    // Root mode indicator / switch.
+                    icon.name: win.snap.root ? "object-unlocked" : "object-locked"
+                    text: win.snap.root ? "root" : ""
+                    checkable: true
+                    checked: !!win.snap.root
+                    onClicked: mon.set_root_mode(!win.snap.root)
+                    ToolTip.text: win.snap.root
+                        ? "Root access is on: every process's disk I/O, GPU use, executable path, environment and open files are visible, and signals to root's processes need no further prompts. Click to turn off."
+                        : "Root access is off: other users' (e.g. root's) disk I/O, GPU use, paths, environment and files are hidden by the kernel. Click to turn it on (asks polkit once)."
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
+                }
                 Label { text: "Update"; color: win.dimColor }
                 ComboBox {
                     model: [{ t: "0.25 s", v: 250 }, { t: "0.5 s", v: 500 }, { t: "1 s", v: 1000 }, { t: "2 s", v: 2000 }, { t: "5 s", v: 5000 }]
@@ -370,6 +383,13 @@ ApplicationWindow {
                     Menu {
                         id: optionsMenu
                         MenuItem { text: "Start at login (in the tray)"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
+                        MenuItem {
+                            text: win.snap.rootStarting ? "Root access (waiting for polkit…)" : "Root access (polkit)"
+                            checkable: true
+                            checked: !!win.snap.root
+                            enabled: !win.snap.rootStarting
+                            onTriggered: mon.set_root_mode(!win.snap.root)
+                        }
                         MenuSeparator {}
                         MenuItem { text: "Show resources (r)"; checkable: true; checked: settings.showResources; onTriggered: settings.showResources = !settings.showResources }
                         MenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
@@ -968,55 +988,184 @@ ApplicationWindow {
     Dialog {
         id: details
         property var info: ({})
+        property string envFilter: ""
+        property bool asking: false
         function openFor(pid) {
             info = JSON.parse(mon.details(pid))
+            envFilter = ""
+            asking = false
+            tabs.currentIndex = 0
             open()
+        }
+        function askRoot() {
+            asking = true
+            mon.inspect_as_root(info.pid)
+        }
+        Connections {
+            target: mon
+            function onInspected(json) {
+                const r = JSON.parse(json)
+                if (r.pid !== details.info.pid) return
+                details.asking = false
+                if (r.error) { win.showStatus(r.error); return }
+                details.info = Object.assign({}, details.info, { environ: r.environ, files: r.files })
+            }
         }
         title: "PID " + (info.pid || "") + " — " + (info.name || "")
         anchors.centerIn: parent
-        width: Math.min(win.width - 80, 760)
+        width: Math.min(win.width - 80, 1000)
+        height: Math.min(win.height - 80, 760)
         standardButtons: Dialog.Close
         modal: true
-        GridLayout {
+
+        // What a tab shows when the kernel hides the data.
+        component NeedsRoot: ColumnLayout {
+            property string what
+            spacing: 10
+            Label { text: "The kernel only shows a process's " + what + " to its owner or root."; color: win.dimColor }
+            Button {
+                text: details.asking ? "Waiting for authorization…" : "Read as root…"
+                icon.name: "dialog-password"
+                enabled: !details.asking
+                onClicked: details.askRoot()
+            }
+            Label { text: "Or turn on Root access in ☰ Options to see everything without asking again."; color: win.dimColor; font.italic: true }
+        }
+
+        ColumnLayout {
             anchors.fill: parent
-            columns: 2
-            columnSpacing: 12
-            rowSpacing: 4
-            Repeater {
-                model: [
-                    ["Command", details.info.command],
-                    ["Executable", details.info.exe],
-                    ["Working dir", details.info.cwd],
-                    ["State", details.info.state],
-                    ["Parent PID", details.info.ppid],
-                    ["Threads", details.info.threads],
-                    ["Open files", details.info.fds < 0 ? "(no permission)" : details.info.fds],
-                    ["UIDs", details.info.uid],
-                    ["Peak VM / swap", (details.info.vmPeak || "-") + " / " + (details.info.vmSwap || "-")],
-                    ["Disk read / write", details.info.readBytes == null ? "(no permission)" : Fmt.bytes(details.info.readBytes) + " / " + Fmt.bytes(details.info.writeBytes)],
-                    ["Context switches", (details.info.ctxtVoluntary || "-") + " voluntary, " + (details.info.ctxtInvoluntary || "-") + " forced"],
-                    ["cgroup", details.info.cgroup],
-                    ["Container", details.info.containerId ? (details.info.containerName || "?") + "  (" + details.info.engine + ")" : "—"],
-                    ["Image", details.info.containerImage || "—"],
-                    ["Container ID", details.info.containerId ? details.info.containerId.slice(0, 12) : "—"],
-                    ["GPU", details.info.gpus ? "GPU" + details.info.gpus + " · VRAM " + Fmt.bytes(details.info.vram) + " · GTT " + Fmt.bytes(details.info.gtt)
-                        + " · GFX/CMP/DMA/DEC/ENC " + (details.info.gpuEngines || []).map(v => v.toFixed(0) + "%").join(" / ") : "—"],
-                ]
-                delegate: Item {
-                    Layout.columnSpan: 2
-                    Layout.fillWidth: true
-                    implicitHeight: Math.max(k.implicitHeight, v.implicitHeight)
-                    Label { id: k; text: modelData[0]; color: win.dimColor; width: 140 }
-                    TextEdit {
-                        id: v
-                        x: 150
-                        width: parent.width - 150
-                        text: modelData[1] === undefined || modelData[1] === null ? "" : String(modelData[1])
-                        readOnly: true
-                        selectByMouse: true
-                        wrapMode: TextEdit.WrapAnywhere
-                        color: win.textColor
-                        font: win.mono
+            spacing: 6
+            TabBar {
+                id: tabs
+                Layout.fillWidth: true
+                TabButton { text: "Overview" }
+                TabButton { text: "Environment" + (details.info.environ ? " (" + details.info.environ.length + ")" : "") }
+                TabButton { text: "Open files" + (details.info.files ? " (" + details.info.files.length + ")" : "") }
+            }
+            StackLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                currentIndex: tabs.currentIndex
+
+                // ---- Overview
+                ScrollView {
+                    clip: true
+                    GridLayout {
+                        width: details.availableWidth - 20
+                        columns: 2
+                        columnSpacing: 12
+                        rowSpacing: 4
+                        Repeater {
+                            model: [
+                                ["Command", details.info.command],
+                                ["Executable", details.info.exe],
+                                ["Working dir", details.info.cwd],
+                                ["State", details.info.state],
+                                ["Parent PID", details.info.ppid],
+                                ["Threads", details.info.threads],
+                                ["Open files", details.info.files ? details.info.files.length : (details.info.fds < 0 ? "(needs root)" : details.info.fds)],
+                                ["UIDs", details.info.uid],
+                                ["Peak VM / swap", (details.info.vmPeak || "-") + " / " + (details.info.vmSwap || "-")],
+                                ["Disk read / write", details.info.readBytes == null ? "(needs root)" : Fmt.bytes(details.info.readBytes) + " / " + Fmt.bytes(details.info.writeBytes)],
+                                ["Context switches", (details.info.ctxtVoluntary || "-") + " voluntary, " + (details.info.ctxtInvoluntary || "-") + " forced"],
+                                ["cgroup", details.info.cgroup],
+                                ["Container", details.info.containerId ? (details.info.containerName || "?") + "  (" + details.info.engine + ")" : "—"],
+                                ["Image", details.info.containerImage || "—"],
+                                ["Container ID", details.info.containerId ? details.info.containerId.slice(0, 12) : "—"],
+                                ["GPU", details.info.gpus ? "GPU" + details.info.gpus + " · VRAM " + Fmt.bytes(details.info.vram) + " · GTT " + Fmt.bytes(details.info.gtt)
+                                    + " · GFX/CMP/DMA/DEC/ENC " + (details.info.gpuEngines || []).map(v => v.toFixed(0) + "%").join(" / ") : "—"],
+                            ]
+                            delegate: Item {
+                                Layout.columnSpan: 2
+                                Layout.fillWidth: true
+                                implicitHeight: Math.max(k.implicitHeight, v.implicitHeight)
+                                Label { id: k; text: modelData[0]; color: win.dimColor; width: 140 }
+                                TextEdit {
+                                    id: v
+                                    x: 150
+                                    width: parent.width - 150
+                                    text: modelData[1] === undefined || modelData[1] === null ? "" : String(modelData[1])
+                                    readOnly: true
+                                    selectByMouse: true
+                                    wrapMode: TextEdit.WrapAnywhere
+                                    color: win.textColor
+                                    font: win.mono
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---- Environment
+                ColumnLayout {
+                    spacing: 6
+                    NeedsRoot { visible: !details.info.environ; what: "environment" }
+                    TextField {
+                        visible: !!details.info.environ
+                        Layout.fillWidth: true
+                        placeholderText: "Filter variables"
+                        text: details.envFilter
+                        onTextChanged: details.envFilter = text
+                    }
+                    ListView {
+                        visible: !!details.info.environ
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        model: (details.info.environ || []).filter(kv => !details.envFilter
+                            || (kv[0] + "=" + kv[1]).toLowerCase().indexOf(details.envFilter.toLowerCase()) >= 0)
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: TextEdit {
+                            required property var modelData
+                            width: ListView.view.width - 14
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.WrapAnywhere
+                            textFormat: TextEdit.RichText
+                            font: win.mono
+                            color: win.textColor
+                            // NAME=value, with PATH-like lists one entry per line.
+                            text: {
+                                const k = modelData[0], v = modelData[1]
+                                const list = v.indexOf(":") > 0 && v.split(":").length > 2 && v.indexOf("://") < 0
+                                const val = list
+                                    ? v.split(":").map(p => table.valueHtml(p)).join("<br>" + "&nbsp;".repeat(k.length + 1))
+                                    : table.valueHtml(v)
+                                return "<span style='font-family:" + win.mono.family + "'>" + table.span(table.syn.flag, k) + table.span(table.syn.eq, "=") + val + "</span>"
+                            }
+                        }
+                    }
+                }
+
+                // ---- Open files
+                ColumnLayout {
+                    spacing: 6
+                    NeedsRoot { visible: !details.info.files; what: "open files" }
+                    ListView {
+                        visible: !!details.info.files
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        model: details.info.files || []
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Row {
+                            required property var modelData
+                            spacing: 10
+                            Text { width: 5 * win.mono.pointSize; horizontalAlignment: Text.AlignRight; text: modelData.fd; font: win.mono; color: win.dimColor }
+                            Text {
+                                width: 8 * win.mono.pointSize
+                                text: modelData.kind
+                                font: win.mono
+                                color: ({ socket: win.cBlue, pipe: win.cYellow, device: win.cMagenta, anon: win.dimColor, memfd: win.dimColor })[modelData.kind] || win.cGreen
+                            }
+                            TextEdit {
+                                text: modelData.target
+                                readOnly: true
+                                selectByMouse: true
+                                font: win.mono
+                                color: win.textColor
+                            }
+                        }
                     }
                 }
             }

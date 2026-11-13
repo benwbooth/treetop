@@ -3,6 +3,7 @@
 
 use crate::containers::{self, Names};
 use crate::gpu;
+use crate::root::RootData;
 use std::cell::RefCell;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -109,6 +110,8 @@ pub struct Processes {
     pub frozen: bool,
     /// Focus mode: only this process and its descendants are shown.
     pub focus: Option<i32>,
+    /// Readings from the polkit root helper, when root mode is on.
+    pub root: Option<RootData>,
     prev_rank: RefCell<HashMap<i32, usize>>,
 }
 
@@ -148,6 +151,7 @@ impl Processes {
             gpu_order: Vec::new(),
             frozen: false,
             focus: None,
+            root: None,
             prev_rank: RefCell::new(HashMap::new()),
         }
     }
@@ -178,8 +182,16 @@ impl Processes {
             let ticks = (n(11) + n(12)) as u64;
             let kernel = pid == 2 || ppid == 2;
 
-            let st = match self.statics.get(&pid) {
-                Some(s) if s.start == start => s.clone(),
+            let st = match self.statics.get_mut(&pid) {
+                Some(s) if s.start == start => {
+                    // Root mode can now replace a guessed executable path.
+                    if s.exe.ends_with('?') {
+                        if let Some(real) = self.root.as_ref().and_then(|r| r.exe.get(&pid)) {
+                            s.exe = real.clone();
+                        }
+                    }
+                    s.clone()
+                }
                 _ => {
                     let uid = fs::metadata(&base).map(|m| m.uid()).unwrap_or(0);
                     let raw = fs::read(base.join("cmdline")).unwrap_or_default();
@@ -193,7 +205,10 @@ impl Processes {
                         String::new()
                     } else {
                         let argv0 = raw.split(|b| *b == 0).next().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
-                        resolve_exe(&base, &argv0)
+                        match self.root.as_ref().and_then(|r| r.exe.get(&pid)) {
+                            Some(real) => real.clone(),
+                            None => resolve_exe(&base, &argv0),
+                        }
                     };
                     let s = Static { start, uid, cmd, exe, container };
                     self.statics.insert(pid, s.clone());
@@ -215,7 +230,15 @@ impl Processes {
                     io_now.insert(pid, cur);
                     (cur.0.saturating_sub(old.0) as f64 / interval, cur.1.saturating_sub(old.1) as f64 / interval)
                 }
-                Err(_) => (-1.0, -1.0),
+                Err(_) => match self.root.as_ref().and_then(|r| r.io.get(&pid)).copied() {
+                    // Root mode: the helper read the counters for us.
+                    Some(cur) => {
+                        let old = self.prev_io.get(&pid).copied().unwrap_or(cur);
+                        io_now.insert(pid, cur);
+                        (cur.0.saturating_sub(old.0) as f64 / interval, cur.1.saturating_sub(old.1) as f64 / interval)
+                    }
+                    None => (-1.0, -1.0),
+                },
             };
 
             let prev = self.prev_ticks.get(&pid).copied().unwrap_or(ticks);
@@ -294,7 +317,7 @@ impl Processes {
         }
         self.cnet = cnet;
         self.prev_cnet = prev_cnet;
-        for (pid, uses) in self.gpu.lock().unwrap().iter() {
+        for (pid, uses) in self.gpu_uses().iter() {
             if let Some(p) = procs.get_mut(pid) {
                 let mut ids = Vec::new();
                 for u in uses {
@@ -315,10 +338,19 @@ impl Processes {
         self.procs = procs;
     }
 
+    /// Per-process GPU use: the root helper's (every process) in root mode,
+    /// else our own poller's (our processes).
+    fn gpu_uses(&self) -> HashMap<i32, Vec<gpu::GpuUse>> {
+        match &self.root {
+            Some(r) if !r.gpu.is_empty() => r.gpu.clone(),
+            _ => self.gpu.lock().unwrap().clone(),
+        }
+    }
+
     /// Engine busy % per GPU (summed over processes), in gpu_order.
     pub fn gpu_engine_totals(&self) -> Vec<[f64; 5]> {
         let mut t = vec![[0.0; 5]; self.gpu_order.len()];
-        for uses in self.gpu.lock().unwrap().values() {
+        for uses in self.gpu_uses().values() {
             for u in uses {
                 if let Some(i) = self.gpu_order.iter().position(|d| *d == u.pdev) {
                     for e in 0..5 {

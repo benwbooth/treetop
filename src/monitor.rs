@@ -24,6 +24,18 @@ pub mod qobject {
         #[qsignal]
         fn updated(self: Pin<&mut Monitor>, json: QString);
 
+        /// Result of inspect_as_root: {pid, environ, files} or {pid, error}.
+        #[qsignal]
+        fn inspected(self: Pin<&mut Monitor>, json: QString);
+
+        /// Root mode through polkit: one prompt, then privileged readings.
+        #[qinvokable]
+        fn set_root_mode(self: &Monitor, on: bool);
+        /// Reads a process's environment/open files as root (helper, or a
+        /// one-time pkexec prompt); answers through inspected().
+        #[qinvokable]
+        fn inspect_as_root(self: &Monitor, pid: i32);
+
         #[qinvokable]
         fn set_interval(self: &Monitor, ms: i32);
         #[qinvokable]
@@ -70,6 +82,7 @@ use core::pin::Pin;
 use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -87,6 +100,11 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    /// Pointer over the list: keep the order (atomic so hovering never
+    /// waits on the sampler's lock).
+    frozen: AtomicBool,
+    root: Arc<Mutex<Option<crate::root::Helper>>>,
+    root_starting: AtomicBool,
 }
 
 pub struct MonitorRust {
@@ -96,6 +114,7 @@ pub struct MonitorRust {
 
 impl Default for MonitorRust {
     fn default() -> Self {
+        let root = Arc::new(Mutex::new(None));
         MonitorRust {
             shared: Arc::new(Shared {
                 state: Mutex::new(State {
@@ -107,8 +126,11 @@ impl Default for MonitorRust {
                     relayout: false,
                 }),
                 wake: Condvar::new(),
+                frozen: AtomicBool::new(false),
+                root: root.clone(),
+                root_starting: AtomicBool::new(false),
             }),
-            actions: Arc::new(Actions::new()),
+            actions: Arc::new(Actions::new(root)),
         }
     }
 }
@@ -147,7 +169,25 @@ impl cxx_qt::Initialize for qobject::Monitor {
                         let wait = next.saturating_duration_since(Instant::now());
                         st = shared.wake.wait_timeout(st, wait).unwrap().0;
                     }
-                    let mut out = if st.relayout && Instant::now() < next {
+                    let sampling = !(st.relayout && Instant::now() < next);
+                    if sampling {
+                        // Ask the root helper (if any) without holding the
+                        // state lock, so the UI never waits on it.
+                        drop(st);
+                        let reply = shared.root.lock().unwrap().as_mut().map(|h| h.request("sample"));
+                        st = shared.state.lock().unwrap();
+                        match reply {
+                            Some(Some(v)) => st.procs.root = Some(crate::root::RootData::from_json(&v)),
+                            Some(None) => {
+                                *shared.root.lock().unwrap() = None;
+                                st.procs.root = None;
+                                actions.notify("Root access ended".into());
+                            }
+                            None => st.procs.root = None,
+                        }
+                    }
+                    st.procs.frozen = shared.frozen.load(Ordering::Relaxed);
+                    let mut out = if !sampling {
                         // Re-layout only (sort/filter/expand changed).
                         json!({"rowsOnly": true})
                     } else {
@@ -172,6 +212,8 @@ impl cxx_qt::Initialize for qobject::Monitor {
                             }
                         }
                         out["notices"] = json!(notices);
+                        out["root"] = json!(s.procs.root.is_some());
+                        out["rootStarting"] = json!(shared.root_starting.load(Ordering::Relaxed));
                         out
                     };
                     st.relayout = false;
@@ -271,7 +313,50 @@ impl qobject::Monitor {
 
     fn set_frozen(&self, frozen: bool) {
         // No relayout needed: the next sample simply keeps the order.
-        self.shared.state.lock().unwrap().procs.frozen = frozen;
+        self.shared.frozen.store(frozen, Ordering::Relaxed);
+    }
+
+    fn set_root_mode(&self, on: bool) {
+        if !on {
+            // Dropping the helper closes its stdin; it exits.
+            *self.shared.root.lock().unwrap() = None;
+            self.actions.notify("Root access off".into());
+            self.refresh();
+            return;
+        }
+        if self.shared.root.lock().unwrap().is_some() || self.shared.root_starting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let shared = self.shared.clone();
+        let actions = self.actions.clone();
+        std::thread::spawn(move || {
+            // Blocks while polkit asks for the password.
+            match crate::root::Helper::start() {
+                Ok(h) => {
+                    *shared.root.lock().unwrap() = Some(h);
+                    actions.notify("Root access on: showing every process's I/O, GPU, paths and files".into());
+                }
+                Err(e) => actions.notify(e),
+            }
+            shared.root_starting.store(false, Ordering::SeqCst);
+            shared.state.lock().unwrap().relayout = true;
+            shared.wake.notify_one();
+        });
+    }
+
+    fn inspect_as_root(&self, pid: i32) {
+        let qt = self.qt_thread();
+        let root = self.shared.root.clone();
+        std::thread::spawn(move || {
+            let via_helper = root.lock().unwrap().as_mut().and_then(|h| h.request(&format!("inspect {pid}")));
+            let mut v = match via_helper {
+                Some(v) => v,
+                None => crate::root::inspect_once(pid).unwrap_or_else(|e| json!({"error": e})),
+            };
+            v["pid"] = json!(pid);
+            let text = v.to_string();
+            let _ = qt.queue(move |obj| obj.inspected(QString::from(&text)));
+        });
     }
 
     fn send_signal(&self, pids: &QString, signal: i32) -> QString {
@@ -308,6 +393,15 @@ impl qobject::Monitor {
         let io = read("io");
         let io_field = |k: &str| io.lines().find_map(|l| l.strip_prefix(k).and_then(|v| v.trim_start_matches(':').trim().parse::<u64>().ok()));
         let cgroup = read("cgroup").lines().next().unwrap_or("").rsplit(':').next().unwrap_or("").to_string();
+        let mut environ = crate::inspect::environ(pid);
+        let mut files = crate::inspect::files(pid);
+        if environ.is_none() || files.is_none() {
+            // Root mode: the helper can read them without another prompt.
+            if let Some(v) = self.shared.root.lock().unwrap().as_mut().and_then(|h| h.request(&format!("inspect {pid}"))) {
+                environ = environ.or_else(|| (!v["environ"].is_null()).then(|| v["environ"].clone()));
+                files = files.or_else(|| (!v["files"].is_null()).then(|| v["files"].clone()));
+            }
+        }
         let st = self.shared.state.lock().unwrap();
         let p = st.procs.procs.get(&pid);
         let container = p.and_then(|p| p.container.clone());
@@ -327,6 +421,9 @@ impl qobject::Monitor {
             "gpus": p.map(|p| p.gpus.clone()),
             "vram": p.map(|p| p.vram), "gtt": p.map(|p| p.gtt),
             "gpuEngines": p.map(|p| p.gpu_engines.to_vec()),
+            // null when the kernel won't show them (other users' processes).
+            "environ": environ,
+            "files": files,
         });
         QString::from(&v.to_string())
     }

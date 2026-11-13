@@ -9,6 +9,9 @@ use std::sync::Mutex;
 pub struct Actions {
     tx: Mutex<Sender<String>>,
     rx: Mutex<Receiver<String>>,
+    /// The polkit root helper, when root mode is on: used instead of a
+    /// pkexec prompt per action.
+    root: std::sync::Arc<Mutex<Option<crate::root::Helper>>>,
 }
 
 pub const SIGNALS: &[(&str, i32)] = &[
@@ -31,9 +34,27 @@ fn signal_name(sig: i32) -> String {
 }
 
 impl Actions {
-    pub fn new() -> Self {
+    pub fn new(root: std::sync::Arc<Mutex<Option<crate::root::Helper>>>) -> Self {
         let (tx, rx) = channel();
-        Actions { tx: Mutex::new(tx), rx: Mutex::new(rx) }
+        Actions { tx: Mutex::new(tx), rx: Mutex::new(rx), root }
+    }
+
+    /// A message for the status line.
+    pub fn notify(&self, msg: String) {
+        let _ = self.tx.lock().unwrap().send(msg);
+    }
+
+    /// Runs a signal/renice through the root helper if it's running.
+    fn via_helper(&self, what: &str, request: String) -> Option<String> {
+        let mut guard = self.root.lock().unwrap();
+        let reply = guard.as_mut()?.request(&request)?;
+        let ok = reply["ok"].as_u64().unwrap_or(0);
+        let errors: Vec<String> = reply["errors"].as_array().map(|a| a.iter().filter_map(|e| e.as_str().map(String::from)).collect()).unwrap_or_default();
+        let mut s = format!("{what}: done as root on {ok}");
+        if !errors.is_empty() {
+            s += &format!("; {}", errors.join("; "));
+        }
+        Some(s)
     }
 
     /// Messages finished since the last call (results of elevated actions).
@@ -82,7 +103,13 @@ impl Actions {
         if ok > 0 {
             parts.push(format!("SIG{name} sent to {ok} process{}", if ok == 1 { "" } else { "es" }));
         }
+        let list_args = denied.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
         if !denied.is_empty() {
+            if let Some(r) = self.via_helper(&format!("SIG{name}"), format!("signal {sig} {list_args}")) {
+                parts.push(r);
+                parts.extend(errors);
+                return parts.join("; ");
+            }
             let kill = which("kill");
             let mut args = vec![kill, "-s".into(), name.clone()];
             args.extend(denied.iter().map(|p| p.to_string()));
@@ -107,7 +134,12 @@ impl Actions {
         if ok > 0 {
             parts.push(format!("nice {nice} set on {ok}"));
         }
+        let list_args = denied.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
         if !denied.is_empty() {
+            if let Some(r) = self.via_helper(&format!("renice {nice}"), format!("renice {nice} {list_args}")) {
+                parts.push(r);
+                return parts.join("; ");
+            }
             let mut args = vec![which("renice"), "-n".into(), nice.to_string(), "-p".into()];
             args.extend(denied.iter().map(|p| p.to_string()));
             parts.push(self.elevate(format!("renice {nice}"), args));
