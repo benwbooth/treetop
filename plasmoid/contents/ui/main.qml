@@ -302,7 +302,7 @@ PlasmoidItem {
             }
             KStat {
                 visible: root.cfg.showDisk
-                h: compact.h; label: root.lbl("DSK", "D"); color: root.palette.disk
+                h: compact.h; label: root.lbl("DISK", "D"); color: root.palette.disk
                 readonly property bool io: root.cfg.diskMode === "io"
                 value: io ? root.fmtRate(Number(diskR.value) + Number(diskW.value)) : (Number(diskUse.value) || 0).toFixed(0) + "%"
                 bar: !io

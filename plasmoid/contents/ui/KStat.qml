@@ -62,58 +62,78 @@ RowLayout {
         border.width: 1
         radius: 1
         Rectangle {
-            visible: stat.bar
+            visible: stat.bar && !stat.inside
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.margins: 1
             height: Math.max(0, Math.min(1, stat.fill)) * (parent.height - 2)
             color: Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.7)
         }
-        // The value sits small and see-through in the top corner, so the
-        // graph underneath stays visible.
+        // Only measures the value's width; the graph canvas paints it.
         Text {
             id: valueInside
-            visible: stat.inside
-            z: 2
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.topMargin: -1
-            anchors.rightMargin: 2
+            visible: false
             text: stat.value
-            color: Kirigami.Theme.textColor
-            opacity: 0.8
             font.pixelSize: Math.round(stat.h * 0.3)
+            font.bold: true
             font.family: "monospace"
-            style: Text.Outline
-            styleColor: Qt.rgba(Kirigami.Theme.backgroundColor.r, Kirigami.Theme.backgroundColor.g, Kirigami.Theme.backgroundColor.b, 0.35)
-            renderType: Text.NativeRendering
         }
+        // Graph (or disk fill) plus the value in the top corner.
         Canvas {
             id: graph
-            visible: !stat.bar
+            visible: !stat.bar || stat.inside
             anchors.fill: parent
             anchors.margins: 1
             renderStrategy: Canvas.Threaded
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                const v = stat.history
-                if (!v || v.length < 2) return
-                const w = width, hh = height, n = v.length
+            function shape(ctx, w, hh) {
                 ctx.beginPath()
+                if (stat.bar) {
+                    const fh = Math.max(0, Math.min(1, stat.fill)) * hh
+                    ctx.rect(0, hh - fh, w, fh)
+                    return fh > 0
+                }
+                const v = stat.history
+                if (!v || v.length < 2) return false
+                const n = v.length
                 ctx.moveTo(0, hh)
                 for (let i = 0; i < n; i++) ctx.lineTo(i / (n - 1) * w, hh - Math.min(1, Math.max(0, v[i])) * hh)
                 ctx.lineTo(w, hh)
                 ctx.closePath()
-                ctx.fillStyle = Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.6)
-                ctx.fill()
-                ctx.beginPath()
-                for (let i = 0; i < n; i++) {
-                    const y = hh - Math.min(1, Math.max(0, v[i])) * hh
-                    if (i === 0) ctx.moveTo(0, y); else ctx.lineTo(i / (n - 1) * w, y)
+                return true
+            }
+            onPaint: {
+                const ctx = getContext("2d")
+                ctx.reset()
+                const w = width, hh = height
+                const has = shape(ctx, w, hh)
+                if (has) {
+                    ctx.fillStyle = Qt.rgba(stat.color.r, stat.color.g, stat.color.b, stat.bar ? 0.75 : 0.6)
+                    ctx.fill()
                 }
-                ctx.strokeStyle = Qt.lighter(stat.color, 1.25)
-                ctx.lineWidth = 1.5
-                ctx.stroke()
+                const v = stat.history
+                if (!stat.bar && v && v.length >= 2) {
+                    ctx.beginPath()
+                    for (let i = 0; i < v.length; i++) {
+                        const y = hh - Math.min(1, Math.max(0, v[i])) * hh
+                        if (i === 0) ctx.moveTo(0, y); else ctx.lineTo(i / (v.length - 1) * w, y)
+                    }
+                    ctx.strokeStyle = Qt.lighter(stat.color, 1.25)
+                    ctx.lineWidth = 1.5
+                    ctx.stroke()
+                }
+                if (!stat.inside) return
+                // Light digits with a dark halo: readable over the fill and
+                // over the empty background alike.
+                ctx.font = "bold " + Math.round(stat.h * 0.3) + "px monospace"
+                ctx.textAlign = "right"
+                ctx.textBaseline = "top"
+                const x = w - 1, y = 0
+                const bg = Kirigami.Theme.backgroundColor
+                ctx.lineJoin = "round"
+                ctx.lineWidth = 3
+                ctx.strokeStyle = Qt.rgba(bg.r * 0.6, bg.g * 0.6, bg.b * 0.6, 0.92)
+                ctx.strokeText(stat.value, x, y)
+                ctx.fillStyle = Qt.lighter(Kirigami.Theme.textColor, 1.1)
+                ctx.fillText(stat.value, x, y)
             }
         }
     }
@@ -127,4 +147,6 @@ RowLayout {
         Layout.alignment: Qt.AlignVCenter
     }
     onHistoryChanged: graph.requestPaint()
+    onValueChanged: graph.requestPaint()
+    onFillChanged: graph.requestPaint()
 }
