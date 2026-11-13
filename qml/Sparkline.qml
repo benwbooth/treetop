@@ -5,6 +5,7 @@ import QtQuick
 // which is how the network/disk cards show in vs. out.
 Canvas {
     id: c
+    renderStrategy: Canvas.Threaded
     property var series: []
     property real maximum: 0        // 0 = autoscale
     property int capacity: 60

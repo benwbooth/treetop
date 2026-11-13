@@ -318,6 +318,23 @@ ApplicationWindow {
                 ToolButton { text: "List"; checkable: true; checked: win.view === "flat"; ButtonGroup.group: viewGroup; onClicked: win.setView("flat"); icon.name: "view-list-details" }
                 ToolButton { text: "Containers"; checkable: true; checked: win.view === "containers"; ButtonGroup.group: viewGroup; onClicked: win.setView("containers"); icon.name: "application-x-docker" }
                 ToolButton { text: "GPU"; checkable: true; checked: win.view === "gpu"; ButtonGroup.group: viewGroup; onClicked: win.setView("gpu"); icon.name: "video-display" }
+                ToolSeparator { visible: win.view === "tree" || win.view === "containers" }
+                ToolButton {
+                    visible: win.view === "tree" || win.view === "containers"
+                    icon.name: "expand-all"
+                    text: "Expand all"
+                    onClicked: mon.set_expanded_all(true)
+                    ToolTip.text: "Expand every branch of the tree (*)"
+                    ToolTip.visible: hovered
+                }
+                ToolButton {
+                    visible: win.view === "tree" || win.view === "containers"
+                    icon.name: "collapse-all"
+                    text: "Collapse all"
+                    onClicked: mon.set_expanded_all(false)
+                    ToolTip.text: "Collapse the tree to its top-level processes (_)"
+                    ToolTip.visible: hovered
+                }
                 ToolSeparator {}
                 TextField {
                     id: filterField
@@ -960,7 +977,7 @@ ApplicationWindow {
                 + "U             untag all\n"
                 + "+ / − / ← →   expand / collapse subtree\n"
                 + "Shift+← →     scroll sideways (Shift+wheel too)\n"
-                + "*             expand all\n"
+                + "* / _         expand all / collapse all\n"
                 + "Enter         details\n"
                 + "F9 / k        signal menu (right-click too)\n"
                 + "F7 / ]        nice − (higher priority)\n"

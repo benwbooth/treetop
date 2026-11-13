@@ -67,6 +67,12 @@ FocusScope {
           tip: "Which GPU(s) the process has open, numbered as in the GPU cards above (GPU1, GPU2, ...)." },
         { key: "engines", title: "GFX/CMP/DMA/DEC/ENC", chars: 20,
           tip: "Per-engine GPU usage in %: GFX (3D/graphics), CMP (compute: ML, OpenCL, ROCm), DMA (copy engine), DEC (video decode), ENC (video encode)." },
+        { key: "ior", title: "DISK R", chars: 8, right: true,
+          tip: "Disk reads per second by this process, as the storage layer counts them (data actually fetched from disk, not page-cache hits). Blank for other users' processes: the kernel only shows their I/O counters to root." },
+        { key: "iow", title: "DISK W", chars: 8, right: true,
+          tip: "Disk writes per second by this process (data it caused to be written to storage). Blank for other users' processes, whose counters only root can read." },
+        { key: "net", title: "NET ↓/↑", chars: 15, right: true,
+          tip: "Network download/upload per second. Linux keeps no per-process network counters (tools like nethogs need root to capture packets), but it does count per network namespace — so this shows each container's traffic, on the container's first process and on its row in the Containers view. Host processes share the host's network and stay blank; the Network card above shows the host total." },
         { key: "time", title: "TIME+", chars: 10, right: true,
           tip: "Total CPU time the process has used since it started (user + system), in minutes:seconds.hundredths, or hours once it passes an hour. A busy process accumulates time quickly; a long-lived idle one barely moves." },
         { key: "container", title: "CONTAINER", chars: 16, optional: true,
@@ -87,10 +93,11 @@ FocusScope {
         hiddenColumns = h
     }
 
-    // /nix/store/<32-char hash>-name -> /nix/store/…-name
-    readonly property var storeHash: /\/nix\/store\/[0-9a-df-np-sv-z]{32}-/g
+    // /nix/store/<32-char hash>-name -> /nix/store/<first 6>…-name: short,
+    // but different builds of the same package stay distinguishable.
+    readonly property var storeHash: /\/nix\/store\/([0-9a-df-np-sv-z]{6})[0-9a-df-np-sv-z]{26}-/g
     function tidy(s) {
-        return shortenStorePaths ? s.replace(storeHash, "/nix/store/…-") : s
+        return shortenStorePaths ? s.replace(storeHash, "/nix/store/$1…-") : s
     }
 
     function colWidth(c) {
@@ -161,10 +168,14 @@ FocusScope {
     }
     // Program dir dim, program name bold, then each argument coloured by
     // kind: flags, values, paths, numbers, URLs. Cached per command line.
+    // In-row text is capped (the tooltip has the whole thing): laying out
+    // multi-kilobyte rich text for every row that scrolls in stutters.
+    readonly property int maxRowCommand: 500
     function highlight(command) {
         const hit = synCache.map[command]
         if (hit !== undefined) return hit
-        const cmd = tidy(command)
+        let cmd = tidy(command)
+        if (cmd.length > maxRowCommand) cmd = cmd.slice(0, maxRowCommand) + " …"
         const parts = cmd.split(/( +)/)
         const prog = parts[0] || ""
         const slash = prog.lastIndexOf("/")
@@ -256,7 +267,7 @@ FocusScope {
         for (const [i, row] of d.changed) {
             if (i < rows.count) rows.set(i, row); else rows.append(row)
             k[i] = row.key
-            const n = row.prefix.length + 2 + tidy(row.command).length + (row.container ? row.container.length + 6 : 0)
+            const n = row.prefix.length + 2 + Math.min(maxRowCommand + 2, tidy(row.command).length) + (row.container ? row.container.length + 6 : 0)
             if (n > longest) longest = n
         }
         if (longest !== maxLineChars) maxLineChars = longest
@@ -428,8 +439,11 @@ FocusScope {
                 id: listHover
                 onHoveredChanged: table.monitor.set_frozen(hovered)
             }
-            flickDeceleration: 2500
-            maximumFlickVelocity: 12000
+            flickDeceleration: 1400
+            maximumFlickVelocity: 30000
+            // Scroll speed: rows per wheel notch and touchpad gain.
+            readonly property real wheelRows: 6
+            readonly property real touchGain: 1.8
 
             // Smooth scrolling. Mouse wheels glide to an accumulated target
             // (faster when spun quickly); touchpads track the finger and
@@ -444,14 +458,14 @@ FocusScope {
                 id: wheelAnim
                 target: list
                 property: "contentY"
-                duration: 180
+                duration: 110
                 easing.type: Easing.OutCubic
             }
             NumberAnimation {
                 id: wheelAnimX
                 target: list
                 property: "contentX"
-                duration: 180
+                duration: 110
                 easing.type: Easing.OutCubic
             }
             function clampY(y) { return Math.max(0, Math.min(y, Math.max(0, contentHeight - height))) }
@@ -471,13 +485,15 @@ FocusScope {
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 onWheel: (ev) => {
                     const now = Date.now()
-                    const fast = now - list.lastWheel < 60 ? 2.2 : (now - list.lastWheel < 140 ? 1.5 : 1)
+                    // Spinning the wheel quickly accelerates (up to ~4x).
+                    const gapMs = now - list.lastWheel
+                    const fast = gapMs < 40 ? 4 : (gapMs < 80 ? 2.8 : (gapMs < 160 ? 1.7 : 1))
                     if (ev.pixelDelta.x !== 0 || ev.pixelDelta.y !== 0) {
                         // Touchpad: follow the fingers on both axes and remember
                         // the speed, so lifting them keeps it coasting.
                         wheelAnim.stop(); wheelAnimX.stop()
                         list.cancelFlick()
-                        const dx = -ev.pixelDelta.x, dy = -ev.pixelDelta.y
+                        const dx = -ev.pixelDelta.x * list.touchGain, dy = -ev.pixelDelta.y * list.touchGain
                         const dt = Math.max(1, now - list.tpLast)
                         list.tpVelocityX = list.tpVelocityX * 0.6 + (dx / dt * 1000) * 0.4
                         list.tpVelocity = list.tpVelocity * 0.6 + (dy / dt * 1000) * 0.4
@@ -493,7 +509,7 @@ FocusScope {
                     } else if (ev.angleDelta.y !== 0) {
                         if (!wheelAnim.running) list.wheelTarget = list.contentY
                         list.lastWheel = now
-                        list.wheelTarget = list.clampY(list.wheelTarget - ev.angleDelta.y / 120 * table.rowHeight * 3 * fast)
+                        list.wheelTarget = list.clampY(list.wheelTarget - ev.angleDelta.y / 120 * table.rowHeight * list.wheelRows * fast)
                         wheelAnim.stop()
                         wheelAnim.from = list.contentY
                         wheelAnim.to = list.wheelTarget
@@ -508,8 +524,8 @@ FocusScope {
                 id: flingTimer
                 interval: 40
                 onTriggered: {
-                    const vx = Math.abs(list.tpVelocityX) > 150 ? -list.tpVelocityX : 0
-                    const vy = Math.abs(list.tpVelocity) > 150 ? -list.tpVelocity : 0
+                    const vx = Math.abs(list.tpVelocityX) > 150 ? -list.tpVelocityX * 1.3 : 0
+                    const vy = Math.abs(list.tpVelocity) > 150 ? -list.tpVelocity * 1.3 : 0
                     if (vx !== 0 || vy !== 0) list.flick(vx, vy)
                     list.tpVelocity = 0
                     list.tpVelocityX = 0
@@ -548,6 +564,10 @@ FocusScope {
                 required property real vram
                 required property string gpus
                 required property string gpuEngines
+                required property real ioR
+                required property real ioW
+                required property real netRx
+                required property real netTx
 
                 readonly property bool current: key === table.currentKey
                 readonly property bool isTagged: !!table.tagged[pid]
@@ -579,6 +599,9 @@ FocusScope {
                     case "vram": return vram > 0 ? Fmt.bytes(vram) : ""
                     case "gpus": return gpus
                     case "engines": return gpuEngines
+                    case "ior": return ioR > 0 ? Fmt.bytes(ioR) : (ioR < 0 ? "" : "0")
+                    case "iow": return ioW > 0 ? Fmt.bytes(ioW) : (ioW < 0 ? "" : "0")
+                    case "net": return netRx < 0 ? "" : Fmt.bytes(netRx) + "/" + Fmt.bytes(netTx)
                     case "time": return group ? count + (count === 1 ? " proc" : " procs") : Fmt.cpuTime(time)
                     case "container": return group ? "" : container
                     }
@@ -593,12 +616,14 @@ FocusScope {
                     if (k === "gpu" && gpu >= 50) return "#c06fd8"
                     if (k === "res" && res >= 1073741824) return "#4fb3d9"
                     if (k === "vram" && vram >= 1073741824) return "#c06fd8"
+                    if ((k === "ior" && ioR >= 1048576) || (k === "iow" && ioW >= 1048576)) return "#4fb3d9"
+                    if (k === "net" && netRx + netTx >= 1048576) return "#4f8fe0"
                     if (k === "user" && user === "root") return "#e0794f"
                     if (k === "container") return chip
                     return fg
                 }
                 function commandHtml() {
-                    return current ? Fmt.escape(table.tidy(command)) : table.highlight(command)
+                    return current ? Fmt.escape(table.tidy(command).slice(0, table.maxRowCommand)) : table.highlight(command)
                 }
 
                 function fixedHtml() {
@@ -761,6 +786,8 @@ FocusScope {
                     table.setCollapsed(true)
                 } else if (t === "*") {
                     table.monitor.set_expanded_all(true)
+                } else if (t === "_") {
+                    table.monitor.set_expanded_all(false)
                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                     if (table.currentPid > 0) table.showDetails(table.currentPid); else table.toggleCurrent()
                 } else if (event.key === Qt.Key_F9 || t === "k") {

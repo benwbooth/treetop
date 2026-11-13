@@ -36,11 +36,14 @@ Item {
         Row {
             anchors.fill: parent
             Repeater {
-                model: meter.segments
+                // A count, not the array: the segments are created once and
+                // only resized as values change.
+                model: meter.segments.length
                 Rectangle {
+                    readonly property var seg: meter.segments[index] || ({ value: 0, color: "transparent" })
                     height: track.height
-                    width: Math.max(0, Math.min(1, (modelData.value || 0) / meter.maximum)) * track.width
-                    color: modelData.color
+                    width: Math.max(0, Math.min(1, (seg.value || 0) / meter.maximum)) * track.width
+                    color: seg.color
                 }
             }
         }

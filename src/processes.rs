@@ -70,6 +70,10 @@ pub struct Proc {
     pub gtt: u64,
     pub gpu_engines: [f64; 5],
     pub gpus: String,
+    /// Disk read/write in bytes/s from /proc/<pid>/io; -1 when unreadable
+    /// (other users' processes without root).
+    pub io_r: f64,
+    pub io_w: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,6 +87,10 @@ pub enum View {
 pub struct Processes {
     statics: HashMap<i32, Static>,
     prev_ticks: HashMap<i32, u64>,
+    prev_io: HashMap<i32, (u64, u64)>,
+    /// Container network: previous (rx, tx) per container and the current rates.
+    prev_cnet: HashMap<String, (u64, u64)>,
+    pub cnet: HashMap<String, (f64, f64)>,
     users: HashMap<u32, String>,
     clk_tck: f64,
     page: u64,
@@ -120,6 +128,9 @@ impl Processes {
         Processes {
             statics: HashMap::new(),
             prev_ticks: HashMap::new(),
+            prev_io: HashMap::new(),
+            prev_cnet: HashMap::new(),
+            cnet: HashMap::new(),
             users: load_users(),
             clk_tck: unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64,
             page: unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64,
@@ -145,6 +156,8 @@ impl Processes {
     pub fn sample(&mut self, interval: f64, mem_total: u64) {
         let mut procs = HashMap::new();
         let mut ticks_now = HashMap::new();
+        let mut io_now = HashMap::new();
+        let mut cnet_pid: HashMap<String, i32> = HashMap::new();
         let Ok(dir) = fs::read_dir("/proc") else { return };
         for e in dir.flatten() {
             let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else { continue };
@@ -190,6 +203,18 @@ impl Processes {
             let res = sm.get(1).copied().unwrap_or(0) * self.page;
             let shr = sm.get(2).copied().unwrap_or(0) * self.page;
 
+            // Disk I/O (storage-layer bytes, so page-cache hits don't count).
+            let (io_r, io_w) = match fs::read_to_string(base.join("io")) {
+                Ok(io) => {
+                    let field = |k: &str| io.lines().find_map(|l| l.strip_prefix(k)?.trim().parse::<u64>().ok()).unwrap_or(0);
+                    let cur = (field("read_bytes:"), field("write_bytes:"));
+                    let old = self.prev_io.get(&pid).copied().unwrap_or(cur);
+                    io_now.insert(pid, cur);
+                    (cur.0.saturating_sub(old.0) as f64 / interval, cur.1.saturating_sub(old.1) as f64 / interval)
+                }
+                Err(_) => (-1.0, -1.0),
+            };
+
             let prev = self.prev_ticks.get(&pid).copied().unwrap_or(ticks);
             let cpu = ticks.saturating_sub(prev) as f64 / (interval * self.clk_tck) * 100.0;
             ticks_now.insert(pid, ticks);
@@ -198,6 +223,10 @@ impl Processes {
                 Some((id, engine)) => (Some(id), engine),
                 None => (None, ""),
             };
+            if let Some(id) = &container {
+                // Any process of the container sees its network namespace.
+                cnet_pid.entry(id.clone()).or_insert(pid);
+            }
             let cpu_avg = match self.procs.get(&pid) {
                 Some(old) => old.cpu_avg * 0.5 + cpu * 0.5,
                 None => cpu,
@@ -211,6 +240,8 @@ impl Processes {
                     gtt: 0,
                     gpu_engines: [0.0; 5],
                     gpus: String::new(),
+                    io_r,
+                    io_w,
                     pid,
                     ppid,
                     uid: st.uid,
@@ -235,6 +266,31 @@ impl Processes {
         }
         self.statics.retain(|pid, _| procs.contains_key(pid));
         self.prev_ticks = ticks_now;
+        self.prev_io = io_now;
+        // Per-container network: /proc/<pid>/net/dev shows that process's
+        // network namespace, and it's readable for any process.
+        let mut cnet = HashMap::new();
+        let mut prev_cnet = HashMap::new();
+        for (id, pid) in &cnet_pid {
+            let Ok(dev) = fs::read_to_string(format!("/proc/{pid}/net/dev")) else { continue };
+            let (mut rx, mut tx) = (0u64, 0u64);
+            for line in dev.lines().skip(2) {
+                let Some((name, rest)) = line.split_once(':') else { continue };
+                if name.trim() == "lo" {
+                    continue;
+                }
+                let f: Vec<u64> = rest.split_whitespace().map(|x| x.parse().unwrap_or(0)).collect();
+                if f.len() > 8 {
+                    rx += f[0];
+                    tx += f[8];
+                }
+            }
+            let old = self.prev_cnet.get(id).copied().unwrap_or((rx, tx));
+            cnet.insert(id.clone(), (rx.saturating_sub(old.0) as f64 / interval, tx.saturating_sub(old.1) as f64 / interval));
+            prev_cnet.insert(id.clone(), (rx, tx));
+        }
+        self.cnet = cnet;
+        self.prev_cnet = prev_cnet;
         for (pid, uses) in self.gpu.lock().unwrap().iter() {
             if let Some(p) = procs.get_mut(pid) {
                 let mut ids = Vec::new();
@@ -299,6 +355,9 @@ impl Processes {
             "time" => (p.ticks as f64 / self.clk_tck, 1.0),
             "gpu" => (p.gpu, 0.5),
             "vram" => (p.vram as f64, 4.0 * 1048576.0),
+            "ior" => (p.io_r.max(0.0), 16.0 * 1024.0),
+            "net" => (self.net_of(p), 4.0 * 1024.0),
+            "iow" => (p.io_w.max(0.0), 16.0 * 1024.0),
             _ => return None,
         };
         Some(if v < floor { 0 } else { 1 + ((v / floor).ln() / 1.35f64.ln()) as i64 })
@@ -326,6 +385,11 @@ impl Processes {
         });
     }
 
+    /// Network rate of the process's container (0 for host processes).
+    fn net_of(&self, p: &Proc) -> f64 {
+        p.container.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.0 + v.1).unwrap_or(0.0)
+    }
+
     fn sort_pids(&self, pids: &mut [i32]) {
         let key = self.sort_key.as_str();
         let procs = &self.procs;
@@ -346,6 +410,9 @@ impl Processes {
                 "container" => pa.container.cmp(&pb.container),
                 "gpu" => pa.gpu.partial_cmp(&pb.gpu).unwrap_or(std::cmp::Ordering::Equal),
                 "vram" => pa.vram.cmp(&pb.vram),
+                "ior" => pa.io_r.partial_cmp(&pb.io_r).unwrap_or(std::cmp::Ordering::Equal),
+                "net" => self.net_of(pa).partial_cmp(&self.net_of(pb)).unwrap_or(std::cmp::Ordering::Equal),
+                "iow" => pa.io_w.partial_cmp(&pb.io_w).unwrap_or(std::cmp::Ordering::Equal),
                 _ => pa.cpu.partial_cmp(&pb.cpu).unwrap_or(std::cmp::Ordering::Equal),
             };
             let ord = if self.sort_desc { ord.reverse() } else { ord };
@@ -373,6 +440,11 @@ impl Processes {
             "containerRoot": container_root,
             "gpu": p.gpu, "vram": p.vram as f64, "gtt": p.gtt as f64, "gpus": p.gpus,
             "gpuEngines": p.gpu_engines.iter().map(|v| format!("{v:.0}")).collect::<Vec<_>>().join("/"),
+            "ioR": p.io_r, "ioW": p.io_w,
+            // Network is only known per container (network namespace); shown
+            // on the container's first process.
+            "netRx": if container_root { p.container.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.0).unwrap_or(-1.0) } else { -1.0 },
+            "netTx": if container_root { p.container.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.1).unwrap_or(-1.0) } else { -1.0 },
         })
     }
 
@@ -523,6 +595,10 @@ impl Processes {
                         "gpu": members.iter().map(|p| self.procs[p].gpu).fold(0.0, f64::max),
                         "vram": members.iter().map(|p| self.procs[p].vram).sum::<u64>() as f64,
                         "gtt": 0.0, "gpus": "", "gpuEngines": "",
+                        "ioR": members.iter().map(|p| self.procs[p].io_r.max(0.0)).sum::<f64>(),
+                        "ioW": members.iter().map(|p| self.procs[p].io_w.max(0.0)).sum::<f64>(),
+                        "netRx": g.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.0).unwrap_or(-1.0),
+                        "netTx": g.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.1).unwrap_or(-1.0),
                     }));
                     if self.collapsed.contains(&key) {
                         continue;
