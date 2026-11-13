@@ -524,6 +524,8 @@ fn sensors(gpu_order: &[String]) -> Vec<Value> {
             }
             c if c.starts_with("iwlwifi") || c.starts_with("mt7") || c.starts_with("ath") => "Wi-Fi".to_string(),
             c if c.starts_with("steam") => "Steam controller".to_string(),
+            // Super I/O chips: the motherboard's own fan headers and sensors.
+            c if c.starts_with("nct6") || c.starts_with("it87") || c.starts_with("it86") || c.starts_with("f718") || c.starts_with("w836") => "Motherboard".to_string(),
             c => c.to_string(),
         };
         let Ok(files) = fs::read_dir(&h) else { continue };
@@ -539,10 +541,24 @@ fn sensors(gpu_order: &[String]) -> Vec<Value> {
             };
             let Some(raw) = read_u64(h.join(&n)) else { continue };
             let label = read(h.join(format!("{base}_label"))).map(|l| l.trim().to_string()).unwrap_or(base.clone());
-            // Generic "temp1"/"fan1" say nothing beyond the kind.
-            let label = if label.trim_start_matches(kind).chars().all(|c| c.is_ascii_digit()) { kind.to_string() } else { label };
+            // Generic "temp1": just "temp"; fans keep their header number
+            // ("Fan 2") so you can tell headers apart. Motherboard register
+            // names get readable ones.
+            let num = label.trim_start_matches(kind);
+            let label = if num.chars().all(|c| c.is_ascii_digit()) {
+                if kind == "fan" && !num.is_empty() { format!("Fan {num}") } else { kind.to_string() }
+            } else {
+                match label.as_str() {
+                    "SYSTIN" => "System".to_string(),
+                    "CPUTIN" => "CPU socket".to_string(),
+                    "TSI0_TEMP" => "CPU".to_string(),
+                    "SMBUSMASTER 0" => "SMBus master".to_string(),
+                    l => l.to_string(),
+                }
+            };
             let value = if kind == "temp" { raw as f64 / 1000.0 } else { raw as f64 };
-            if kind == "temp" && (value <= 0.0 || value > 200.0) {
+            // An empty fan header reads 0 rpm; leave it out (and impossible temps).
+            if (kind == "fan" && value <= 0.0) || (kind == "temp" && (value <= 0.0 || value > 200.0)) {
                 continue;
             }
             out.push(json!({"dev": dev, "label": label, "kind": kind, "value": value}));
@@ -550,7 +566,7 @@ fn sensors(gpu_order: &[String]) -> Vec<Value> {
     }
     // CPU, GPUs, RAM, drives, Wi-Fi, then anything else (stable within).
     let rank = |d: &str| {
-        if d == "CPU" { 0 } else if d.starts_with("GPU") { 1 } else if d.starts_with("RAM") { 2 }
+        if d == "CPU" { 0 } else if d == "Motherboard" { 1 } else if d.starts_with("GPU") { 1 } else if d.starts_with("RAM") { 2 }
         else if d.contains("SSD") || d.starts_with("NVMe") || d.contains("GP-") { 3 } else if d == "Wi-Fi" { 4 } else { 5 }
     };
     out.sort_by(|a, b| {
