@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libgl1-mesa-dev libxkbcommon-dev \
-            libxkbcommon-x11-0 libxcb-cursor0 libfontconfig1-dev libfreetype-dev libdbus-1-dev file
+            libxkbcommon-x11-0 libxcb-cursor0 libfontconfig1-dev libfreetype-dev libdbus-1-dev file librsvg2-bin
 
       - name: Qt
         uses: jurplel/install-qt-action@v4
@@ -63,15 +63,16 @@ jobs:
           chmod +x linuxdeploy linuxdeploy-plugin-qt
           mkdir -p AppDir/usr/share/plasma/plasmoids
           cp -R plasmoid AppDir/usr/share/plasma/plasmoids/com.benwbooth.treetop
-          export VERSION="${GITHUB_REF_NAME#v}"
-          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="$(git rev-parse --short HEAD)"
+          export LINUXDEPLOY_OUTPUT_VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || LINUXDEPLOY_OUTPUT_VERSION="$(git rev-parse --short HEAD)"
+          # appimagetool wants a PNG icon for .DirIcon
+          rsvg-convert -w 256 -h 256 resources/treetop.svg -o treetop.png
           ./linuxdeploy --appdir AppDir \
             -e target/release/treetop \
             -d resources/treetop.desktop \
-            -i resources/treetop.svg \
+            -i resources/treetop.svg -i treetop.png \
             --plugin qt --output appimage
           ls -la *.AppImage
-          mv treetop-*.AppImage "treetop-${VERSION}-x86_64.AppImage"
           ./treetop-*-x86_64.AppImage --help
 
       - uses: actions/upload-artifact@v4
