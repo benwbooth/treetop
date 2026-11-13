@@ -159,6 +159,32 @@ pub fn inspect_main(pid: i32) {
     println!("{}", json!({"environ": inspect::environ(pid), "files": inspect::files(pid)}));
 }
 
+/// A pkexec command that works from any environment: the setuid wrapper by
+/// full path (a dev shell's PATH may hold a non-setuid copy), and no $SHELL
+/// (pkexec refuses to run when $SHELL isn't listed in /etc/shells, as with
+/// a Nix dev shell's bash).
+pub fn pkexec() -> Command {
+    let path = ["/run/wrappers/bin/pkexec", "/usr/bin/pkexec", "/bin/pkexec"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or("pkexec");
+    let mut c = Command::new(path);
+    c.env_remove("SHELL");
+    c
+}
+
+/// pkexec's own explanation, for the status line.
+pub fn pkexec_error(code: Option<i32>, stderr: &str) -> String {
+    match code {
+        Some(126) => "Root access: authorization was cancelled".into(),
+        Some(127) => "Root access: not authorized".into(),
+        _ => {
+            let msg = stderr.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("").trim();
+            if msg.is_empty() { "Root access failed".into() } else { format!("Root access failed: {msg}") }
+        }
+    }
+}
+
 fn self_exe() -> Result<String, String> {
     std::env::current_exe().map(|p| p.display().to_string()).map_err(|e| e.to_string())
 }
@@ -173,12 +199,12 @@ pub struct Helper {
 impl Helper {
     /// Starts the helper through pkexec; blocks until polkit has answered.
     pub fn start() -> Result<Helper, String> {
-        let mut child = Command::new("pkexec")
+        let mut child = pkexec()
             .arg(self_exe()?)
             .arg("--root-helper")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("couldn't run pkexec: {e}"))?;
         let stdin = child.stdin.take().unwrap();
@@ -186,8 +212,12 @@ impl Helper {
         let mut first = String::new();
         let _ = out.read_line(&mut first);
         if first.trim() != "ready" {
-            let _ = child.wait();
-            return Err("root access wasn't granted".into());
+            let mut err = String::new();
+            if let Some(mut e) = child.stderr.take() {
+                let _ = std::io::Read::read_to_string(&mut e, &mut err);
+            }
+            let code = child.wait().ok().and_then(|s| s.code());
+            return Err(pkexec_error(code, &err));
         }
         Ok(Helper { _child: child, stdin, out })
     }
@@ -205,14 +235,14 @@ impl Helper {
 
 /// One-time privileged read of a process's environment and open files.
 pub fn inspect_once(pid: i32) -> Result<Value, String> {
-    let out = Command::new("pkexec")
+    let out = pkexec()
         .arg(self_exe()?)
         .arg("--inspect")
         .arg(pid.to_string())
         .output()
         .map_err(|e| format!("couldn't run pkexec: {e}"))?;
     if !out.status.success() {
-        return Err("root access wasn't granted".into());
+        return Err(pkexec_error(out.status.code(), &String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| e.to_string())
 }

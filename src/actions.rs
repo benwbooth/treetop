@@ -2,7 +2,6 @@
 //! EPERM (someone else's process, e.g. root's) the same action is re-run
 //! through pkexec, which makes the desktop's polkit agent ask for a password.
 
-use std::process::Command;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 
@@ -66,7 +65,7 @@ impl Actions {
         let tx = self.tx.lock().unwrap().clone();
         let pending = format!("{what}: asking for authorization…");
         std::thread::spawn(move || {
-            let res = Command::new("pkexec").args(&args).output();
+            let res = crate::root::pkexec().args(&args).output();
             let msg = match res {
                 Ok(o) if o.status.success() => format!("{what}: done (as root)"),
                 Ok(o) if o.status.code() == Some(126) => format!("{what}: authorization cancelled"),

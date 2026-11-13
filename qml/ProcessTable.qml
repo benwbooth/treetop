@@ -115,6 +115,15 @@ FocusScope {
         return n
     }
     readonly property var fixedColumns: visibleColumns.filter(c => c.chars > 0)
+    // Column boundaries (x, before horizontal scrolling), in the gap
+    // between one column's text and the next.
+    readonly property var dividerXs: {
+        const xs = []
+        let n = 0
+        for (const c of fixedColumns) { n += c.chars + 1; xs.push(4 + n * cw - cw * 0.5) }
+        return xs
+    }
+    property color dividerColor: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.10)
 
     // One row's fixed columns as a single monospace run (one Text item per
     // row instead of one per cell keeps scrolling cheap).
@@ -377,6 +386,16 @@ FocusScope {
                 ToolTip.delay: 500
                 ToolTip.text: "Choose which columns to show (you can also right-click any column header)."
             }
+            Repeater {
+                model: table.dividerXs.length
+                Rectangle {
+                    x: table.dividerXs[index] - list.contentX
+                    y: 3
+                    width: 1
+                    height: parent.height - 6
+                    color: Qt.rgba(0, 0, 0, 0.25)
+                }
+            }
             Row {
                 x: -list.contentX
                 anchors.verticalCenter: parent.verticalCenter
@@ -440,6 +459,21 @@ FocusScope {
             // Rows are as wide as the longest command line, and scroll sideways.
             contentWidth: Math.max(width, table.fixedWidth + 8 + (table.maxLineChars + 4) * table.cw)
             flickableDirection: Flickable.AutoFlickIfNeeded
+            // Column dividers: a single overlay, so rows stay cheap.
+            Item {
+                parent: list
+                anchors.fill: parent
+                z: 5
+                Repeater {
+                    model: table.dividerXs.length
+                    Rectangle {
+                        x: table.dividerXs[index] - list.contentX
+                        width: 1
+                        height: parent.height
+                        color: table.dividerColor
+                    }
+                }
+            }
             HoverHandler {
                 id: listHover
                 onHoveredChanged: table.monitor.set_frozen(hovered)
