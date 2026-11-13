@@ -90,7 +90,7 @@ FocusScope {
     }
 
     function colWidth(c) {
-        return c.chars > 0 ? (c.chars + 1) * cw : Math.max(20 * cw, list.width - fixedWidth)
+        return c.chars > 0 ? (c.chars + 1) * cw : Math.max(20 * cw, list.contentWidth - fixedWidth)
     }
     readonly property real fixedWidth: fixedChars * cw
     readonly property int fixedChars: {
@@ -110,6 +110,10 @@ FocusScope {
 
     ListModel { id: rows }
     property var keys: []   // mirror of rows' keys, for fast lookup
+    // Longest command line seen (in characters): how far rows scroll sideways.
+    property int maxLineChars: 0
+    onViewChanged: maxLineChars = 0
+    onShortenStorePathsChanged: maxLineChars = 0
 
     function applyDiff(d) {
         // Where is the selected row on screen right now?
@@ -118,10 +122,14 @@ FocusScope {
         const wasVisible = offset >= 0 && offset < list.height
 
         const k = keys
+        let longest = maxLineChars
         for (const [i, row] of d.changed) {
             if (i < rows.count) rows.set(i, row); else rows.append(row)
             k[i] = row.key
+            const n = row.prefix.length + 2 + tidy(row.command).length + (row.container ? row.container.length + 6 : 0)
+            if (n > longest) longest = n
         }
+        if (longest !== maxLineChars) maxLineChars = longest
         if (rows.count > d.count) rows.remove(d.count, rows.count - d.count)
         k.length = d.count
 
@@ -198,7 +206,31 @@ FocusScope {
                 acceptedButtons: Qt.RightButton
                 onClicked: (mouse) => { const p = mapToItem(table, mouse.x, mouse.y); columnMenu.popup(p.x, p.y) }
             }
+            clip: true
+            // Always-visible way to the column chooser (also: right-click).
+            Rectangle {
+                z: 2
+                anchors.right: parent.right
+                height: parent.height
+                width: colBtn.implicitWidth + 12
+                color: colHover.hovered ? "#57c785" : "#2e9e5b"
+                Text {
+                    id: colBtn
+                    anchors.centerIn: parent
+                    text: table.hiddenColumns.length > 0 ? "⋯ columns (" + table.hiddenColumns.length + " hidden)" : "⋯ columns"
+                    font.family: table.font.family
+                    font.pointSize: table.font.pointSize
+                    font.bold: true
+                    color: "#0d1a12"
+                }
+                HoverHandler { id: colHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: { const p = parent.mapToItem(table, 0, parent.height); columnMenu.popup(p.x, p.y) } }
+                ToolTip.visible: colHover.hovered
+                ToolTip.delay: 500
+                ToolTip.text: "Choose which columns to show (you can also right-click any column header)."
+            }
             Row {
+                x: -list.contentX
                 anchors.verticalCenter: parent.verticalCenter
                 Repeater {
                     model: table.visibleColumns
@@ -256,6 +288,10 @@ FocusScope {
             highlightMoveDuration: 0
             keyNavigationEnabled: true
             ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+            // Rows are as wide as the longest command line, and scroll sideways.
+            contentWidth: Math.max(width, table.fixedWidth + 8 + (table.maxLineChars + 4) * table.cw)
+            flickableDirection: Flickable.AutoFlickIfNeeded
             HoverHandler {
                 id: listHover
                 onHoveredChanged: table.monitor.set_frozen(hovered)
@@ -278,11 +314,21 @@ FocusScope {
                 easing.type: Easing.OutCubic
             }
             function clampY(y) { return Math.max(0, Math.min(y, Math.max(0, contentHeight - height))) }
+            function clampX(x) { return Math.max(0, Math.min(x, Math.max(0, contentWidth - width))) }
+            function scrollX(dx) { contentX = clampX(contentX + dx) }
             WheelHandler {
                 target: null
                 acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                 onWheel: (ev) => {
                     const now = Date.now()
+                    // Sideways: touchpad swipes, tilt wheels, or Shift+wheel.
+                    if (ev.pixelDelta.x !== 0) list.scrollX(-ev.pixelDelta.x)
+                    else if (ev.angleDelta.x !== 0) list.scrollX(-ev.angleDelta.x / 120 * table.cw * 8)
+                    if ((ev.modifiers & Qt.ShiftModifier) && ev.angleDelta.y !== 0 && ev.pixelDelta.y === 0) {
+                        list.scrollX(-ev.angleDelta.y / 120 * table.cw * 8)
+                        ev.accepted = true
+                        return
+                    }
                     if (ev.pixelDelta.y !== 0) {
                         // Touchpad: follow directly, remember speed for the fling.
                         wheelAnim.stop()
@@ -362,7 +408,7 @@ FocusScope {
                 readonly property bool showBadge: chip.a > 0
                     && (group || (table.view !== "containers" && (containerRoot || table.view === "flat" || table.view === "gpu")))
 
-                width: list.width
+                width: list.contentWidth
                 height: table.rowHeight
                 color: current ? table.highlightColor
                      : (group ? Qt.rgba(chip.r, chip.g, chip.b, 0.16)
@@ -544,6 +590,10 @@ FocusScope {
                         table.tagged = tg
                     }
                     list.incrementCurrentIndex()
+                } else if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Right) {
+                    list.scrollX(table.cw * 8)
+                } else if ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Left) {
+                    list.scrollX(-table.cw * 8)
                 } else if (t === "+" || t === "=" || event.key === Qt.Key_Right) {
                     table.setCollapsed(false)
                 } else if (t === "-" || event.key === Qt.Key_Left) {
