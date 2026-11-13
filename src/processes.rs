@@ -43,7 +43,7 @@ fn resolve_exe(base: &std::path::Path, argv0: &str) -> String {
         .unwrap_or_default()
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Proc {
     pub pid: i32,
     pub ppid: i32,
@@ -120,6 +120,20 @@ pub struct Processes {
     restored: bool,
     saved_view: String,
     prev_rank: RefCell<HashMap<i32, usize>>,
+}
+
+/// The container a containerd shim process runs, from its "-id <id>".
+fn shim_container(p: &Proc) -> Option<String> {
+    if !p.name.starts_with("containerd-shim") {
+        return None;
+    }
+    let mut it = p.cmd.split_whitespace();
+    while let Some(a) = it.next() {
+        if a == "-id" {
+            return it.next().filter(|id| id.len() >= 12).map(String::from);
+        }
+    }
+    None
 }
 
 fn load_users() -> HashMap<u32, String> {
@@ -556,12 +570,23 @@ impl Processes {
     }
 
     fn row(&self, p: &Proc, depth: usize, prefix: &str, has_children: bool, names: &HashMap<String, containers::Container>) -> Value {
-        let c = p.container.as_ref().and_then(|id| names.get(id));
         let key = format!("p:{}", p.pid);
-        // First process inside a container (its parent is outside it):
-        // where the tree view puts the container badge.
-        let container_root = p.container.is_some()
-            && self.procs.get(&p.ppid).map(|pp| pp.container != p.container).unwrap_or(true);
+        // A containerd shim runs one container (its "-id <container id>"):
+        // the badge goes on the shim, the natural root of that container's
+        // subtree. Otherwise the first process inside a container (its
+        // parent is outside it) gets it.
+        let shim = shim_container(p);
+        let parent_is_shim = self
+            .procs
+            .get(&p.ppid)
+            .and_then(shim_container)
+            .is_some_and(|id| Some(&id) == p.container.as_ref());
+        let container_root = shim.is_some()
+            || (p.container.is_some()
+                && !parent_is_shim
+                && self.procs.get(&p.ppid).map(|pp| pp.container != p.container).unwrap_or(true));
+        let badge_id = shim.clone().or_else(|| p.container.clone());
+        let c = badge_id.as_ref().and_then(|id| names.get(id));
         json!({
             "key": key, "pid": p.pid, "ppid": p.ppid, "depth": depth, "prefix": prefix,
             "hasChildren": has_children, "expanded": !self.collapsed.contains(&key), "group": false,
@@ -569,7 +594,7 @@ impl Processes {
             "virt": p.virt as f64, "res": p.res as f64, "shr": p.shr as f64,
             "state": p.state.to_string(), "cpu": p.cpu, "mem": p.mem,
             "time": p.ticks as f64 / self.clk_tck, "threads": p.threads,
-            "container": c.map(|c| c.name.clone()).or_else(|| p.container.as_ref().map(|id| id[..12].to_string())).unwrap_or_default(),
+            "container": c.map(|c| c.name.clone()).or_else(|| badge_id.as_ref().map(|id| id[..12.min(id.len())].to_string())).unwrap_or_default(),
             "engine": p.engine, "image": c.map(|c| c.image.clone()).unwrap_or_default(),
             "name": p.name, "command": p.cmd, "exe": p.exe, "kernel": p.kernel, "count": 1,
             "containerRoot": container_root,
@@ -856,5 +881,23 @@ impl Processes {
         });
         json!({"tasks": tasks, "threads": threads, "kthreads": kthreads, "running": running, "containers": containers,
                "gpuProcs": gpu_procs, "focus": focus, "collapsed": self.collapsed.len()})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shim_names_its_container() {
+        let id = "862a21f8fde05ac0b2821943a17b68da2384f31204537d33e35ef260045f5248";
+        let shim = Proc {
+            name: "containerd-shim".into(),
+            cmd: format!("/nix/store/k3rpz-docker-containerd-29.9.2/bin/containerd-shim-runc-v2 -namespace moby -id {id} -address /var/run/docker/containerd/containerd.sock"),
+            ..Default::default()
+        };
+        assert_eq!(shim_container(&shim).as_deref(), Some(id));
+        let other = Proc { name: "dockerd".into(), cmd: "dockerd -id x".into(), ..Default::default() };
+        assert_eq!(shim_container(&other), None);
     }
 }

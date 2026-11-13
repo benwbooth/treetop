@@ -714,8 +714,9 @@ FocusScope {
                     case "res": return Fmt.bytes(res)
                     case "shr": return group ? "" : Fmt.bytes(shr)
                     case "state": return state
-                    case "cpu": return cpu.toFixed(1)
-                    case "mem": return mem.toFixed(1)
+                    // Blank instead of 0.0, so active processes stand out.
+                    case "cpu": return cpu >= 0.05 ? cpu.toFixed(1) : ""
+                    case "mem": return mem >= 0.05 ? mem.toFixed(1) : ""
                     case "gpu": return gpus.length > 0 || gpu > 0 ? gpu.toFixed(1) : ""
                     case "vram": return vram > 0 ? Fmt.bytes(vram) : ""
                     case "gpus": return gpus
