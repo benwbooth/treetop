@@ -43,6 +43,11 @@ int treetopRun(bool startHidden, bool toggle)
         QLocalSocket probe;
         probe.connectToServer(serverName());
         if (probe.waitForConnected(300)) {
+            // Already running. A login/background start (--hidden) leaves it
+            // alone; a plain launch shows it; --toggle flips it.
+            if (startHidden && !toggle) {
+                return 0;
+            }
             probe.write(toggle ? "toggle\n" : "show\n");
             probe.flush();
             probe.waitForBytesWritten(500);

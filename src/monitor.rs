@@ -52,6 +52,10 @@ pub mod qobject {
         fn signal_list(self: &Monitor) -> QString;
         #[qinvokable]
         fn details(self: &Monitor, pid: i32) -> QString;
+        #[qinvokable]
+        fn autostart_enabled(self: &Monitor) -> bool;
+        #[qinvokable]
+        fn set_autostart(self: &Monitor, on: bool) -> QString;
     }
 
     impl cxx_qt::Threading for Monitor {}
@@ -261,6 +265,14 @@ impl qobject::Monitor {
 
     fn renice(&self, pids: &QString, nice: i32) -> QString {
         QString::from(&self.actions.renice(&pid_list(pids), nice))
+    }
+
+    fn autostart_enabled(&self) -> bool {
+        crate::autostart::enabled()
+    }
+
+    fn set_autostart(&self, on: bool) -> QString {
+        QString::from(&crate::autostart::set(on).unwrap_or_else(|e| e))
     }
 
     fn signal_list(&self) -> QString {

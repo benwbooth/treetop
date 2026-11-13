@@ -10,6 +10,7 @@ fn main() {
         "qml/StatCard.qml",
         "qml/ProcessTable.qml",
         "qml/GpuPanel.qml",
+        "qml/SectionHeader.qml",
     ]))
     .crate_include_root(Some("native".to_owned()))
     .qrc_resources(["qml/treetop.svg", "qml/Fmt.js"])

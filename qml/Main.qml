@@ -44,6 +44,17 @@ ApplicationWindow {
     // GPUs the user hid (by PCI address), and the rest with their numbers.
     readonly property var hiddenGpus: settings.hiddenGpus.split(",").filter(x => x.length > 0)
     readonly property var gpus: snap.gpus.map((g, i) => Object.assign({ number: i + 1, index: i }, g)).filter(g => hiddenGpus.indexOf(g.pdev) < 0)
+    readonly property var collapsed: settings.collapsedSections.split(",").filter(x => x.length > 0)
+    function sectionOpen(key) { return collapsed.indexOf(key) < 0 }
+    function toggleSection(key) {
+        const c = collapsed.slice(), i = c.indexOf(key)
+        if (i >= 0) c.splice(i, 1); else c.push(key)
+        settings.collapsedSections = c.join(",")
+    }
+    function setGpuShown(pdev, show) {
+        if (show) settings.hiddenGpus = hiddenGpus.filter(p => p !== pdev).join(",")
+        else hideGpu(pdev)
+    }
     function hideGpu(pdev) {
         const h = hiddenGpus.slice(); if (h.indexOf(pdev) < 0) h.push(pdev)
         settings.hiddenGpus = h.join(",")
@@ -64,6 +75,11 @@ ApplicationWindow {
         property bool showResources: true
         property bool cpuCombined: false
         property string hiddenGpus: ""
+        // Restart detection: a --hidden start soon after an instance was
+        // alive (devloop rebuild) restores the window instead of hiding it.
+        property real lastAlive: 0
+        property bool lastVisible: true
+        property string collapsedSections: ""
         property alias winWidth: win.width
         property alias winHeight: win.height
     }
@@ -72,7 +88,20 @@ ApplicationWindow {
         id: mon
         onUpdated: (json) => win.apply(JSON.parse(json))
     }
-    onVisibleChanged: mon.set_rows_enabled(visible)
+    property bool booted: false
+    property bool autostart: false
+    onVisibleChanged: {
+        mon.set_rows_enabled(visible)
+        if (booted) { settings.lastVisible = visible; settings.sync() }
+    }
+    Timer {
+        interval: 5000; running: true; repeat: true
+        onTriggered: { settings.lastAlive = Date.now(); settings.sync() }
+    }
+    function setAutostart(on) {
+        showStatus(mon.set_autostart(on))
+        autostart = mon.autostart_enabled()
+    }
     Connections {
         target: settings
         function onIntervalChanged() { mon.set_interval(settings.interval) }
@@ -114,6 +143,12 @@ ApplicationWindow {
     Timer { id: statusTimer; interval: 6000; onTriggered: win.status = "" }
 
     Component.onCompleted: {
+        // Restarted by a rebuild (an instance was alive moments ago): come
+        // back the way it was. A real login start stays in the tray.
+        if (startHidden && settings.lastVisible && Date.now() - settings.lastAlive < 30000) win.show()
+        booted = true
+        settings.lastAlive = Date.now()
+        autostart = mon.autostart_enabled()
         mon.set_interval(settings.interval)
         mon.set_rows_enabled(win.visible)
         mon.set_view(settings.view)
@@ -165,6 +200,8 @@ ApplicationWindow {
             Platform.MenuItem { text: "Process tree"; checkable: true; checked: win.view === "tree"; onTriggered: { win.setView("tree"); win.showWindow() } }
             Platform.MenuItem { text: "Containers"; checkable: true; checked: win.view === "containers"; onTriggered: { win.setView("containers"); win.showWindow() } }
             Platform.MenuItem { text: "GPU"; checkable: true; checked: win.view === "gpu"; onTriggered: { win.setView("gpu"); win.showWindow() } }
+            Platform.MenuSeparator {}
+            Platform.MenuItem { text: "Start at login"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
             Platform.MenuSeparator {}
             Platform.MenuItem { text: "Quit"; onTriggered: Qt.quit() }
         }
@@ -235,9 +272,24 @@ ApplicationWindow {
                     Component.onCompleted: currentIndex = indexOfValue(settings.interval)
                     onActivated: settings.interval = currentValue
                 }
-                ToolButton { icon.name: "view-statistics"; checkable: true; checked: settings.showCards; onToggled: settings.showCards = checked; ToolTip.text: "Graphs"; ToolTip.visible: hovered }
-                ToolButton { icon.name: "view-process-system"; checkable: true; checked: settings.showMeters; onToggled: settings.showMeters = checked; ToolTip.text: "Meters"; ToolTip.visible: hovered }
-                ToolButton { icon.name: "help-contents"; onClicked: helpDialog.open(); ToolTip.text: "Keys (h)"; ToolTip.visible: hovered }
+                ToolButton {
+                    icon.name: "application-menu"
+                    ToolTip.text: "Options"
+                    ToolTip.visible: hovered
+                    onClicked: optionsMenu.popup(this, 0, height)
+                    Menu {
+                        id: optionsMenu
+                        MenuItem { text: "Start at login (in the tray)"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
+                        MenuSeparator {}
+                        MenuItem { text: "Show resources (r)"; checkable: true; checked: settings.showResources; onTriggered: settings.showResources = !settings.showResources }
+                        MenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
+                        MenuItem { text: "Meters"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
+                        MenuItem { text: "Combine CPU cores (1)"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
+                        MenuSeparator {}
+                        MenuItem { text: "Keys… (h)"; icon.name: "help-contents"; onTriggered: helpDialog.open() }
+                        MenuItem { text: "Quit"; icon.name: "application-exit"; onTriggered: Qt.quit() }
+                    }
+                }
             }
         }
 
@@ -272,18 +324,28 @@ ApplicationWindow {
                 MenuItem { text: "Combine CPU cores (1)"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
                 MenuSeparator {}
                 Repeater {
-                    model: win.snap.gpus
+                    // Count-based so the open menu isn't rebuilt by each update.
+                    model: win.snap.gpus.length
                     MenuItem {
-                        text: "Show GPU" + (index + 1) + " — " + modelData.name
+                        readonly property var g: win.snap.gpus[index] || ({})
+                        text: "Show GPU" + (index + 1) + " — " + (g.name || "")
                         checkable: true
-                        checked: win.hiddenGpus.indexOf(modelData.pdev) < 0
-                        onTriggered: {
-                            if (checked) settings.hiddenGpus = win.hiddenGpus.filter(p => p !== modelData.pdev).join(",")
-                            else win.hideGpu(modelData.pdev)
-                        }
+                        checked: win.hiddenGpus.indexOf(g.pdev) < 0
+                        onTriggered: win.setGpuShown(g.pdev, !(win.hiddenGpus.indexOf(g.pdev) < 0))
                     }
                 }
             }
+        }
+
+        // One context menu for every GPU card/meter, outside the Repeaters,
+        // so updates can't destroy it while it's open.
+        Menu {
+            id: gpuMenu
+            property string pdev: ""
+            property int number: 0
+            function openFor(g) { pdev = g.pdev; number = g.number; popup() }
+            MenuItem { text: "Hide GPU " + gpuMenu.number; onTriggered: win.hideGpu(gpuMenu.pdev) }
+            MenuItem { text: "GPU view (g)"; onTriggered: win.setView("gpu") }
         }
 
         // kstats half: graph cards
@@ -300,6 +362,7 @@ ApplicationWindow {
                 detail: (win.snap.cpu.temp ? win.snap.cpu.temp.toFixed(0) + "°C · " : "") + "load " + win.snap.load.map(v => v.toFixed(2)).join(" ")
                 series: [{ values: win.hist.cpu, color: win.cGreen }]
                 maximum: 100
+                onClicked: settings.cpuCombined = !settings.cpuCombined
             }
             StatCard {
                 Layout.fillWidth: true
@@ -310,27 +373,23 @@ ApplicationWindow {
                 maximum: 100
             }
             Repeater {
-                model: win.gpus
+                model: win.gpus.length
                 StatCard {
+                    readonly property var g: win.gpus[index] || ({ busy: 0, number: 0, index: 0 })
                     Layout.fillWidth: true
-                    title: "GPU " + modelData.number; accent: win.cMagenta; textColor: win.textColor; dimColor: win.dimColor; font: win.mono
-                    value: modelData.busy.toFixed(0) + "%"
-                    detail: Fmt.bytes(modelData.vramUsed) + " / " + Fmt.bytes(modelData.vramTotal)
-                        + (modelData.temp ? " · " + modelData.temp.toFixed(0) + "°C" : "")
-                        + (modelData.power ? " · " + modelData.power.toFixed(0) + "W" : "")
-                    series: [{ values: win.hist.gpu[modelData.index] || [], color: win.cMagenta }]
+                    title: "GPU " + g.number; accent: win.cMagenta; textColor: win.textColor; dimColor: win.dimColor; font: win.mono
+                    value: (g.busy || 0).toFixed(0) + "%"
+                    detail: Fmt.bytes(g.vramUsed) + " / " + Fmt.bytes(g.vramTotal)
+                        + (g.temp ? " · " + g.temp.toFixed(0) + "°C" : "")
+                        + (g.power ? " · " + g.power.toFixed(0) + "W" : "")
+                    series: [{ values: win.hist.gpu[g.index] || [], color: win.cMagenta }]
                     maximum: 100
-                    ToolTip.text: modelData.name + "\nClick for the GPU view · right-click to hide"
+                    ToolTip.text: (g.name || "") + "\nClick for the GPU view · right-click to hide"
                     ToolTip.visible: gpuHover.hovered
                     ToolTip.delay: 600
                     HoverHandler { id: gpuHover }
                     onClicked: win.setView(win.view === "gpu" ? "tree" : "gpu")
-                    TapHandler { acceptedButtons: Qt.RightButton; onTapped: gpuCardMenu.popup() }
-                    Menu {
-                        id: gpuCardMenu
-                        MenuItem { text: "Hide GPU " + modelData.number; onTriggered: win.hideGpu(modelData.pdev) }
-                        MenuItem { text: "GPU view"; onTriggered: win.setView("gpu") }
-                    }
+                    TapHandler { acceptedButtons: Qt.RightButton; onTapped: gpuMenu.openFor(parent.g) }
                 }
             }
             StatCard {
@@ -359,16 +418,17 @@ ApplicationWindow {
             Layout.bottomMargin: 4
             spacing: 6
             Repeater {
-                model: win.gpus
+                model: win.gpus.length
                 GpuPanel {
+                    readonly property var g: win.gpus[index] || ({})
                     Layout.fillWidth: true
-                    gpu: modelData
-                    number: modelData.number
-                    history: win.hist.gpu[modelData.index] || []
-                    vramHistory: win.hist.vram[modelData.index] || []
+                    gpu: g
+                    number: g.number || 0
+                    history: win.hist.gpu[g.index] || []
+                    vramHistory: win.hist.vram[g.index] || []
                     font: win.mono; textColor: win.textColor; dimColor: win.dimColor; trackColor: win.trackColor
                     accent: win.cMagenta; memColor: win.cCyan
-                    onHideRequested: win.hideGpu(modelData.pdev)
+                    onHideRequested: win.hideGpu(g.pdev)
                 }
             }
             Text {
@@ -378,7 +438,7 @@ ApplicationWindow {
             }
         }
 
-        // htop half: meters
+        // htop half: meters, in collapsible sections
         RowLayout {
             visible: settings.showResources && settings.showMeters && win.view !== "gpu"
             Layout.fillWidth: true
@@ -386,65 +446,64 @@ ApplicationWindow {
             Layout.bottomMargin: 4
             spacing: 16
 
+            // ---- CPU: per-core grid, or (collapsed) one combined meter
             ColumnLayout {
-                visible: settings.cpuCombined
                 Layout.fillWidth: true
                 Layout.preferredWidth: win.width * 0.55
                 Layout.alignment: Qt.AlignTop
                 spacing: 1
+                SectionHeader {
+                    Layout.fillWidth: true
+                    title: "CPU"
+                    open: !settings.cpuCombined
+                    summary: Fmt.pct(win.snap.cpu.total || 0) + " · " + win.snap.cpu.cores.length + " threads"
+                        + (win.snap.cpu.temp ? " · " + win.snap.cpu.temp.toFixed(0) + "°C" : "")
+                        + (settings.cpuCombined ? "" : "   (click to combine, or press 1)")
+                    onToggled: settings.cpuCombined = !settings.cpuCombined
+                }
                 Meter {
+                    visible: settings.cpuCombined
                     Layout.fillWidth: true
                     font: win.mono; textColor: win.textColor; trackColor: win.trackColor
-                    label: "CPU"
-                    labelWidth: 5 * win.mono.pointSize
+                    label: "all"
+                    labelWidth: 3.5 * win.mono.pointSize
                     segments: [
                         { value: win.snap.cpu.nice || 0, color: win.cBlue },
                         { value: win.snap.cpu.user || 0, color: win.cGreen },
                         { value: win.snap.cpu.system || 0, color: win.cRed },
                         { value: win.snap.cpu.other || 0, color: win.cOrange },
                     ]
-                    text: Fmt.pct(win.snap.cpu.total || 0) + "  ·  " + win.snap.cpu.cores.length + " threads"
-                        + (win.snap.cpu.temp ? "  ·  " + win.snap.cpu.temp.toFixed(0) + "°C" : "")
+                    text: "usr " + Fmt.pct(win.snap.cpu.user) + "  sys " + Fmt.pct(win.snap.cpu.system) + "  " + Fmt.pct(win.snap.cpu.total || 0)
                 }
-                Text {
-                    font: win.mono; color: win.dimColor
-                    text: "user " + Fmt.pct(win.snap.cpu.user) + "  sys " + Fmt.pct(win.snap.cpu.system) + "  nice " + Fmt.pct(win.snap.cpu.nice) + "  irq/io " + Fmt.pct(win.snap.cpu.other)
-                        + "   (click or press 1 for per-core)"
-                }
-                TapHandler { onTapped: settings.cpuCombined = false }
-            }
-            GridLayout {
-                id: coreGrid
-                visible: !settings.cpuCombined
-                Layout.fillWidth: true
-                Layout.preferredWidth: win.width * 0.55
-                Layout.alignment: Qt.AlignTop
-                TapHandler { onTapped: settings.cpuCombined = true }
-                HoverHandler { id: coreHover }
-                ToolTip.text: "Per-core usage: green user, blue nice, red system, orange irq/iowait/steal. Click (or press 1) to combine into one meter."
-                ToolTip.visible: coreHover.hovered
-                ToolTip.delay: 1200
-                readonly property int n: win.snap.cpu.cores.length
-                columns: n > 16 ? 4 : (n > 8 ? 2 : 1)
-                columnSpacing: 12
-                rowSpacing: 1
-                flow: GridLayout.TopToBottom
-                rows: Math.ceil(n / columns)
-                Repeater {
-                    model: win.snap.cpu.cores
-                    Meter {
-                        Layout.fillWidth: true
-                        Layout.minimumWidth: 140
-                        font: win.mono; textColor: win.textColor; trackColor: win.trackColor
-                        label: String(index)
-                        labelWidth: 3.5 * win.mono.pointSize
-                        segments: [
-                            { value: modelData[1], color: win.cBlue },
-                            { value: modelData[0], color: win.cGreen },
-                            { value: modelData[2], color: win.cRed },
-                            { value: modelData[3], color: win.cOrange },
-                        ]
-                        text: Fmt.pct(modelData[0] + modelData[1] + modelData[2] + modelData[3])
+                GridLayout {
+                    id: coreGrid
+                    visible: !settings.cpuCombined
+                    Layout.fillWidth: true
+                    readonly property int n: win.snap.cpu.cores.length
+                    columns: n > 16 ? 4 : (n > 8 ? 2 : 1)
+                    columnSpacing: 12
+                    rowSpacing: 1
+                    flow: GridLayout.TopToBottom
+                    rows: Math.max(1, Math.ceil(n / columns))
+                    Repeater {
+                        // A count, not the array: the meters stay alive and
+                        // just update, instead of being rebuilt every tick.
+                        model: coreGrid.n
+                        Meter {
+                            readonly property var c: win.snap.cpu.cores[index] || [0, 0, 0, 0, 0]
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 120
+                            font: win.mono; textColor: win.textColor; trackColor: win.trackColor
+                            label: String(index)
+                            labelWidth: 3.5 * win.mono.pointSize
+                            segments: [
+                                { value: c[1], color: win.cBlue },
+                                { value: c[0], color: win.cGreen },
+                                { value: c[2], color: win.cRed },
+                                { value: c[3], color: win.cOrange },
+                            ]
+                            text: Fmt.pct(c[0] + c[1] + c[2] + c[3])
+                        }
                     }
                 }
             }
@@ -453,7 +512,18 @@ ApplicationWindow {
                 Layout.preferredWidth: Math.max(320, win.width * 0.38)
                 Layout.alignment: Qt.AlignTop
                 spacing: 1
+
+                // ---- Memory
+                SectionHeader {
+                    Layout.fillWidth: true
+                    title: "Memory"
+                    open: win.sectionOpen("mem")
+                    summary: Fmt.bytes(win.snap.mem.used) + " / " + Fmt.bytes(win.snap.mem.total)
+                        + ((win.snap.mem.swapTotal || 0) > 0 ? " · swap " + Fmt.bytes(win.snap.mem.swapUsed) : "")
+                    onToggled: win.toggleSection("mem")
+                }
                 Meter {
+                    visible: win.sectionOpen("mem")
                     Layout.fillWidth: true
                     font: win.mono; textColor: win.textColor; trackColor: win.trackColor
                     label: "Mem"
@@ -468,7 +538,7 @@ ApplicationWindow {
                 }
                 Meter {
                     Layout.fillWidth: true
-                    visible: (win.snap.mem.swapTotal || 0) > 0
+                    visible: win.sectionOpen("mem") && (win.snap.mem.swapTotal || 0) > 0
                     font: win.mono; textColor: win.textColor; trackColor: win.trackColor
                     label: "Swp"
                     labelWidth: 9 * win.mono.pointSize
@@ -476,54 +546,83 @@ ApplicationWindow {
                     segments: [{ value: win.snap.mem.swapUsed, color: win.cRed }]
                     text: Fmt.bytes(win.snap.mem.swapUsed) + "/" + Fmt.bytes(win.snap.mem.swapTotal)
                 }
+
+                // ---- GPUs
+                SectionHeader {
+                    Layout.fillWidth: true
+                    visible: win.gpus.length > 0
+                    title: "GPU"
+                    open: win.sectionOpen("gpu")
+                    summary: win.gpus.map(g => "GPU" + g.number + " " + g.busy.toFixed(0) + "%").join(" · ") + "   (right-click a GPU to hide it)"
+                    onToggled: win.toggleSection("gpu")
+                }
                 Repeater {
-                    model: win.gpus
+                    model: win.sectionOpen("gpu") ? win.gpus.length : 0
                     ColumnLayout {
+                        readonly property var g: win.gpus[index] || ({ busy: 0, number: 0 })
                         Layout.fillWidth: true
                         spacing: 1
-                        TapHandler { acceptedButtons: Qt.RightButton; onTapped: gpuMeterMenu.popup() }
+                        TapHandler { acceptedButtons: Qt.RightButton; onTapped: gpuMenu.openFor(parent.g) }
                         TapHandler { onTapped: win.setView("gpu") }
-                        Menu {
-                            id: gpuMeterMenu
-                            MenuItem { text: "Hide GPU " + modelData.number; onTriggered: win.hideGpu(modelData.pdev) }
-                            MenuItem { text: "GPU view"; onTriggered: win.setView("gpu") }
-                        }
                         Meter {
                             Layout.fillWidth: true
                             font: win.mono; textColor: win.textColor; trackColor: win.trackColor
-                            label: "GPU" + modelData.number
+                            label: "GPU" + parent.g.number
                             labelWidth: 9 * win.mono.pointSize
-                            segments: [{ value: modelData.busy, color: win.cMagenta }]
-                            text: modelData.busy.toFixed(0) + "%" + (modelData.temp ? "  " + modelData.temp.toFixed(0) + "°C" : "") + (modelData.power ? "  " + modelData.power.toFixed(0) + "W" : "")
+                            segments: [{ value: parent.g.busy || 0, color: win.cMagenta }]
+                            text: (parent.g.busy || 0).toFixed(0) + "%" + (parent.g.temp ? "  " + parent.g.temp.toFixed(0) + "°C" : "") + (parent.g.power ? "  " + parent.g.power.toFixed(0) + "W" : "")
                         }
                         Meter {
                             Layout.fillWidth: true
                             font: win.mono; textColor: win.textColor; trackColor: win.trackColor
                             label: "VRAM"
                             labelWidth: 9 * win.mono.pointSize
-                            maximum: modelData.vramTotal || 1
-                            segments: [{ value: modelData.vramUsed, color: win.cCyan }]
-                            text: Fmt.bytes(modelData.vramUsed) + "/" + Fmt.bytes(modelData.vramTotal)
+                            maximum: parent.g.vramTotal || 1
+                            segments: [{ value: parent.g.vramUsed || 0, color: win.cCyan }]
+                            text: Fmt.bytes(parent.g.vramUsed) + "/" + Fmt.bytes(parent.g.vramTotal)
                         }
                     }
                 }
+
+                // ---- Storage
+                SectionHeader {
+                    Layout.fillWidth: true
+                    title: "Storage"
+                    open: win.sectionOpen("storage")
+                    readonly property var fs: win.snap.disk.filesystems || []
+                    summary: fs.length + " filesystems · " + Fmt.bytes(fs.reduce((a, f) => a + f.used, 0)) + " / " + Fmt.bytes(fs.reduce((a, f) => a + f.total, 0))
+                        + " · R " + Fmt.rate(win.snap.disk.read) + " W " + Fmt.rate(win.snap.disk.write)
+                    onToggled: win.toggleSection("storage")
+                }
                 Repeater {
-                    model: win.snap.disk.filesystems
+                    model: win.sectionOpen("storage") ? (win.snap.disk.filesystems || []).length : 0
                     Meter {
+                        readonly property var f: win.snap.disk.filesystems[index] || ({ used: 0, total: 1, mount: "" })
                         Layout.fillWidth: true
                         font: win.mono; textColor: win.textColor; trackColor: win.trackColor
-                        label: modelData.mount
+                        label: f.mount
                         labelWidth: 9 * win.mono.pointSize
-                        maximum: modelData.total
-                        segments: [{ value: modelData.used, color: modelData.used / modelData.total > 0.9 ? win.cRed : win.cCyan }]
-                        text: Fmt.bytes(modelData.used) + "/" + Fmt.bytes(modelData.total)
-                        ToolTip.text: modelData.device + " (" + modelData.type + ")"
+                        maximum: f.total || 1
+                        segments: [{ value: f.used, color: f.used / f.total > 0.9 ? win.cRed : win.cCyan }]
+                        text: Fmt.bytes(f.used) + "/" + Fmt.bytes(f.total)
+                        ToolTip.text: (f.device || "") + " (" + (f.type || "") + ")"
                         ToolTip.visible: fsHover.hovered
                         HoverHandler { id: fsHover }
                     }
                 }
+
+                // ---- System
+                SectionHeader {
+                    Layout.fillWidth: true
+                    title: "System"
+                    open: win.sectionOpen("system")
+                    readonly property var p: win.snap.procs
+                    summary: (p.tasks || 0) + " tasks · load " + win.snap.load.map(v => v.toFixed(2)).join(" ")
+                        + " · ↓" + Fmt.rate(win.snap.net.rx) + " ↑" + Fmt.rate(win.snap.net.tx)
+                    onToggled: win.toggleSection("system")
+                }
                 Text {
-                    Layout.topMargin: 3
+                    visible: win.sectionOpen("system")
                     font: win.mono
                     color: win.textColor
                     textFormat: Text.StyledText
@@ -533,6 +632,7 @@ ApplicationWindow {
                         + (p.containers ? "; <font color='" + win.cMagenta + "'><b>" + p.containers + "</b> containers</font>" : "")
                 }
                 Text {
+                    visible: win.sectionOpen("system")
                     font: win.mono
                     color: win.textColor
                     textFormat: Text.StyledText
@@ -540,6 +640,7 @@ ApplicationWindow {
                         + "   <font color='" + win.cCyan + "'>Uptime:</font> <b>" + Fmt.uptime(win.snap.uptime) + "</b>"
                 }
                 Text {
+                    visible: win.sectionOpen("system")
                     font: win.mono
                     color: win.textColor
                     textFormat: Text.StyledText

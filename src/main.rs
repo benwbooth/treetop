@@ -1,4 +1,5 @@
 mod actions;
+mod autostart;
 mod containers;
 mod gpu;
 mod monitor;
