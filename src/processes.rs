@@ -112,6 +112,13 @@ pub struct Processes {
     pub focus: Option<i32>,
     /// Readings from the polkit root helper, when root mode is on.
     pub root: Option<RootData>,
+    /// Collapsed branches / focus saved last time, applied once the
+    /// processes are sampled (matched by PID *and* start time, so a reused
+    /// PID after a reboot doesn't inherit them).
+    pending_collapsed: Vec<(i32, u64)>,
+    pending_focus: Option<(i32, u64)>,
+    restored: bool,
+    saved_view: String,
     prev_rank: RefCell<HashMap<i32, usize>>,
 }
 
@@ -152,7 +159,82 @@ impl Processes {
             frozen: false,
             focus: None,
             root: None,
+            pending_collapsed: Vec::new(),
+            pending_focus: None,
+            restored: false,
+            saved_view: String::new(),
             prev_rank: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn view_file() -> std::path::PathBuf {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"));
+        base.join("treetop").join("view.json")
+    }
+
+    /// Loads the saved collapsed branches and focus (call once at start).
+    pub fn load_view(&mut self) {
+        let Ok(text) = fs::read_to_string(Self::view_file()) else { return };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else { return };
+        let pair = |x: &Value| Some((x[0].as_i64()? as i32, x[1].as_u64()?));
+        if let Some(list) = v["collapsed"].as_array() {
+            self.pending_collapsed = list.iter().filter_map(pair).collect();
+        }
+        if let Some(list) = v["collapsedGroups"].as_array() {
+            for k in list.iter().filter_map(|k| k.as_str()) {
+                self.collapsed.insert(k.to_string());
+            }
+        }
+        self.pending_focus = pair(&v["focus"]);
+        self.saved_view = text;
+    }
+
+    /// Applies the loaded state to the processes that still exist.
+    fn apply_saved_view(&mut self) {
+        if self.restored {
+            return;
+        }
+        self.restored = true;
+        for (pid, start) in std::mem::take(&mut self.pending_collapsed) {
+            if self.statics.get(&pid).map(|s| s.start) == Some(start) {
+                self.collapsed.insert(format!("p:{pid}"));
+            }
+        }
+        if let Some((pid, start)) = self.pending_focus.take() {
+            if self.statics.get(&pid).map(|s| s.start) == Some(start) {
+                self.focus = Some(pid);
+            }
+        }
+    }
+
+    /// Writes collapsed branches and focus when they changed.
+    pub fn save_view(&mut self) {
+        if !self.restored {
+            return;
+        }
+        let start = |pid: i32| self.statics.get(&pid).map(|s| s.start);
+        let mut collapsed: Vec<Value> = Vec::new();
+        let mut groups: Vec<String> = Vec::new();
+        for k in &self.collapsed {
+            if let Some(pid) = k.strip_prefix("p:").and_then(|p| p.parse::<i32>().ok()) {
+                if let Some(st) = start(pid) {
+                    collapsed.push(json!([pid, st]));
+                }
+            } else {
+                groups.push(k.clone());
+            }
+        }
+        collapsed.sort_by_key(|v| v[0].as_i64());
+        groups.sort();
+        let focus = self.focus.and_then(|f| start(f).map(|st| json!([f, st])));
+        let text = json!({"collapsed": collapsed, "collapsedGroups": groups, "focus": focus}).to_string();
+        if text != self.saved_view {
+            let path = Self::view_file();
+            let _ = fs::create_dir_all(path.parent().unwrap());
+            let _ = fs::write(&path, &text);
+            self.saved_view = text;
         }
     }
 
@@ -336,6 +418,7 @@ impl Processes {
             }
         }
         self.procs = procs;
+        self.apply_saved_view();
     }
 
     /// Per-process GPU use: the root helper's (every process) in root mode,
@@ -493,6 +576,8 @@ impl Processes {
             "gpu": p.gpu, "vram": p.vram as f64, "gtt": p.gtt as f64, "gpus": p.gpus,
             "gpuEngines": p.gpu_engines.iter().map(|v| format!("{v:.0}")).collect::<Vec<_>>().join("/"),
             "ioR": p.io_r, "ioW": p.io_w,
+            // > 0 when this collapsed row shows totals for that many processes.
+            "aggCount": 0,
             // Network: per process with root access (measured from packet
             // headers); otherwise per container on its first process.
             "netRx": self.net_rates(p, container_root).0,
@@ -518,14 +603,65 @@ impl Processes {
             .map(|v| v.iter().copied().filter(|c| keep.as_ref().map(|k| k.contains(c)).unwrap_or(true)).collect())
             .unwrap_or_default();
         let prefix = if depth == 0 { String::new() } else { format!("{lines}{}", if last { "└─ " } else { "├─ " }) };
-        out.push(self.row(&self.procs[&pid], depth, &prefix, !kids.is_empty(), names));
+        let mut row = self.row(&self.procs[&pid], depth, &prefix, !kids.is_empty(), names);
         if self.collapsed.contains(&format!("p:{pid}")) {
+            if !kids.is_empty() {
+                // Collapsed: show the whole subtree's totals on this row.
+                self.aggregate_into(&mut row, pid, children, keep);
+            }
+            out.push(row);
             return;
         }
+        out.push(row);
         let next_lines = if depth == 0 { String::new() } else { format!("{lines}{}", if last { "   " } else { "│  " }) };
         for (i, k) in kids.iter().enumerate() {
             self.walk(*k, children, keep, depth + 1, &next_lines, i + 1 == kids.len(), out, names);
         }
+    }
+
+    /// Sums the usage of `pid` and every descendant into its row.
+    fn aggregate_into(&self, row: &mut Value, pid: i32, children: &HashMap<i32, Vec<i32>>, keep: &Option<HashSet<i32>>) {
+        let (mut cpu, mut mem, mut res, mut gpu, mut vram) = (0.0, 0.0, 0u64, 0.0f64, 0u64);
+        let (mut ior, mut iow, mut rx, mut tx, mut n) = (0.0, 0.0, 0.0, 0.0, 0usize);
+        let (mut any_io, mut any_net) = (false, false);
+        let mut stack = vec![pid];
+        while let Some(p) = stack.pop() {
+            let Some(x) = self.procs.get(&p) else { continue };
+            n += 1;
+            cpu += x.cpu;
+            mem += x.mem;
+            res += x.res;
+            gpu = (gpu + x.gpu).min(100.0);
+            vram += x.vram;
+            if x.io_r >= 0.0 {
+                any_io = true;
+                ior += x.io_r;
+                iow += x.io_w.max(0.0);
+            }
+            let (r, t) = self.net_rates(x, false);
+            if r >= 0.0 {
+                any_net = true;
+                rx += r;
+                tx += t;
+            }
+            if let Some(k) = children.get(&p) {
+                stack.extend(k.iter().copied().filter(|c| keep.as_ref().map(|s| s.contains(c)).unwrap_or(true)));
+            }
+        }
+        row["cpu"] = json!(cpu);
+        row["mem"] = json!(mem);
+        row["res"] = json!(res as f64);
+        row["gpu"] = json!(gpu);
+        row["vram"] = json!(vram as f64);
+        if any_io {
+            row["ioR"] = json!(ior);
+            row["ioW"] = json!(iow);
+        }
+        if any_net {
+            row["netRx"] = json!(rx);
+            row["netTx"] = json!(tx);
+        }
+        row["aggCount"] = json!(n);
     }
 
     /// Builds a forest out of `pids` (parents outside the set make roots).
@@ -675,6 +811,7 @@ impl Processes {
                         "ioW": members.iter().map(|p| self.procs[p].io_w.max(0.0)).sum::<f64>(),
                         "netRx": g.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.0).unwrap_or(-1.0),
                         "netTx": g.as_ref().and_then(|id| self.cnet.get(id)).map(|v| v.1).unwrap_or(-1.0),
+                        "aggCount": 0,
                     }));
                     if self.collapsed.contains(&key) {
                         continue;
@@ -717,6 +854,7 @@ impl Processes {
             chain.reverse();
             json!({"pid": p.pid, "name": p.name, "chain": chain, "count": self.subtree(p.pid).len()})
         });
-        json!({"tasks": tasks, "threads": threads, "kthreads": kthreads, "running": running, "containers": containers, "gpuProcs": gpu_procs, "focus": focus})
+        json!({"tasks": tasks, "threads": threads, "kthreads": kthreads, "running": running, "containers": containers,
+               "gpuProcs": gpu_procs, "focus": focus, "collapsed": self.collapsed.len()})
     }
 }

@@ -124,7 +124,7 @@ impl Default for MonitorRust {
             shared: Arc::new(Shared {
                 state: Mutex::new(State {
                     system: System::new(),
-                    procs: Processes::new(),
+                    procs: { let mut p = Processes::new(); p.load_view(); p },
                     shown: Vec::new(),
                     rows_enabled: true,
                     interval: Duration::from_millis(1000),
@@ -222,6 +222,8 @@ impl cxx_qt::Initialize for qobject::Monitor {
                         out
                     };
                     st.relayout = false;
+                    st.procs.save_view();
+                    out["collapsedCount"] = json!(st.procs.collapsed.len());
                     if st.rows_enabled {
                         out["rows"] = row_diff(&mut st);
                     }

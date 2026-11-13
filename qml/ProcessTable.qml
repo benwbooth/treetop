@@ -26,6 +26,15 @@ FocusScope {
     property var letterHandler: null
     // Focus mode: the PID whose tree is shown alone (0: everything).
     property int focusPid: 0
+    // Restored once rows first arrive: the selection and scroll position
+    // from last time.
+    property string restoreKey: ""
+    property real restoreY: 0
+    property real restoreX: 0
+    property bool restored: false
+    readonly property real scrollY: list.contentY
+    readonly property real scrollX: list.contentX
+    signal scrollMoved()
     function toggleFocus(pid) {
         if (pid > 0) monitor.set_focus(focusPid === pid ? 0 : pid)
     }
@@ -124,6 +133,19 @@ FocusScope {
         return xs
     }
     property color dividerColor: Qt.rgba(textColor.r, textColor.g, textColor.b, 0.10)
+    // Where each fixed column starts (in characters), for the usage bars.
+    readonly property var columnStart: {
+        const m = {}
+        let n = 0
+        for (const c of fixedColumns) { m[c.key] = { at: n, chars: c.chars }; n += c.chars + 1 }
+        return m
+    }
+    // Heat colour for a 0..1 load: green, then yellow, then red.
+    function heat(f) {
+        f = Math.max(0, Math.min(1, f))
+        return f < 0.5 ? Qt.rgba(0.26 + f * 1.3, 0.79, 0.42 - f * 0.4, 1)
+                       : Qt.rgba(0.91, 0.79 - (f - 0.5) * 1.1, 0.22 - (f - 0.5) * 0.2, 1)
+    }
 
     // One row's fixed columns as a single monospace run (one Text item per
     // row instead of one per cell keeps scrolling cheap).
@@ -261,6 +283,17 @@ FocusScope {
         || flingTimer.running || coast.running
 
     function applyDiff(d) {
+        applyDiffAnchored(d)
+        if (!restored && d.count > 0) {
+            // First rows: put back the selection and scroll from last time.
+            const i = keys.indexOf(restoreKey)
+            if (i >= 0) select(i, false)
+            list.contentY = list.clampY(restoreY)
+            list.contentX = list.clampX(restoreX)
+            restored = true
+        }
+    }
+    function applyDiffAnchored(d) {
         // Anchor on what you're looking at: the selected row if it's on
         // screen, otherwise the top visible row. It stays put on screen
         // when rows above it come or go. Nothing moves while you scroll.
@@ -474,6 +507,8 @@ FocusScope {
                     }
                 }
             }
+            onContentYChanged: table.scrollMoved()
+            onContentXChanged: table.scrollMoved()
             HoverHandler {
                 id: listHover
                 onHoveredChanged: table.monitor.set_frozen(hovered)
@@ -653,6 +688,7 @@ FocusScope {
                 required property real ioW
                 required property real netRx
                 required property real netTx
+                required property int aggCount
 
                 readonly property bool current: key === table.currentKey
                 readonly property bool isTagged: !!table.tagged[pid]
@@ -694,11 +730,13 @@ FocusScope {
                 }
                 function cellColor(k) {
                     if (current) return table.highlightTextColor
+                    if (aggCount > 0 && (k === "cpu" || k === "mem" || k === "res" || k === "gpu" || k === "vram" || k === "ior" || k === "iow" || k === "net")) return "#56b6e0"
                     if (k === "state" && state === "R") return "#43c96b"
                     if (k === "state" && state === "D") return "#e05a4f"
                     if (k === "state" && (state === "Z" || state === "T")) return "#d6a72e"
-                    if (k === "cpu" && cpu >= 50) return "#e05a4f"
-                    if (k === "gpu" && gpu >= 50) return "#c06fd8"
+                    if (k === "cpu" && cpu >= 10) return Qt.lighter(table.heat(cpu / 100), 1.25)
+                    if (k === "gpu" && gpu >= 10) return Qt.lighter(table.heat(gpu / 100), 1.25)
+                    if (k === "mem" && mem >= 2) return Qt.lighter(table.heat(Math.sqrt(mem / 100)), 1.25)
                     if (k === "res" && res >= 1073741824) return "#4fb3d9"
                     if (k === "vram" && vram >= 1073741824) return "#c06fd8"
                     if ((k === "ior" && ioR >= 1048576) || (k === "iow" && ioW >= 1048576)) return "#4fb3d9"
@@ -721,6 +759,27 @@ FocusScope {
                     return out.replace(/ /g, "&nbsp;")
                 }
 
+                // Usage bars behind CPU% / MEM% / GPU%, coloured by load, so
+                // busy processes stand out at a glance.
+                Repeater {
+                    model: ["cpu", "mem", "gpu"]
+                    Rectangle {
+                        required property string modelData
+                        readonly property var col: table.columnStart[modelData]
+                        readonly property real v: modelData === "cpu" ? rowItem.cpu : (modelData === "mem" ? rowItem.mem : rowItem.gpu)
+                        // CPU and GPU: 100% = full; memory: square-root scale,
+                        // since a few percent of RAM is already a lot.
+                        readonly property real frac: modelData === "mem" ? Math.sqrt(Math.max(0, v) / 100) : Math.max(0, v) / 100
+                        visible: col !== undefined && v > 0.05
+                        x: col ? 4 + col.at * table.cw : 0
+                        y: 2
+                        height: rowItem.height - 4
+                        width: col ? Math.max(2, Math.min(1, frac) * col.chars * table.cw) : 0
+                        radius: 2
+                        color: table.heat(frac)
+                        opacity: rowItem.current ? 0.55 : 0.32
+                    }
+                }
                 Text {
                     x: 4
                     width: table.fixedWidth
@@ -822,6 +881,20 @@ FocusScope {
                         }
                     }
                     Item { width: rowItem.showBadge ? 6 : 0; height: 1 }
+                    // Collapsed branch: its numbers are the subtree's totals.
+                    Text {
+                        visible: rowItem.aggCount > 0
+                        text: "Σ" + rowItem.aggCount + " "
+                        font.family: table.font.family
+                        font.pointSize: table.font.pointSize
+                        font.bold: true
+                        color: rowItem.current ? table.highlightTextColor : "#56b6e0"
+                        anchors.verticalCenter: parent.verticalCenter
+                        HoverHandler { id: aggHover }
+                        ToolTip.visible: aggHover.hovered
+                        ToolTip.delay: 500
+                        ToolTip.text: "Collapsed: CPU, memory, GPU, disk and network on this row are totals for these " + rowItem.aggCount + " processes (this one and everything below it)."
+                    }
                     Text {
                         text: rowItem.group ? Fmt.escape(table.tidy(rowItem.command)) : rowItem.commandHtml()
                         textFormat: Text.StyledText

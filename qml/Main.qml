@@ -9,7 +9,10 @@ import "Fmt.js" as Fmt
 ApplicationWindow {
     id: win
     property bool startHidden: false
-    visible: !startHidden
+    // Shown by C++ after the saved size/position are applied (wantVisible).
+    visible: false
+    property bool wantVisible: !startHidden
+    property bool restoreMaximized: false
     width: 1280
     height: 860
     minimumWidth: 720
@@ -134,6 +137,7 @@ ApplicationWindow {
         settings.pinnedGpus = pinnedGpus.filter(p => p !== pdev).join(",")
     }
     property string status: ""
+    property int collapsedCount: 0
     property string view: settings.view
 
     QtCore.Settings {
@@ -157,8 +161,14 @@ ApplicationWindow {
         property bool lastVisible: true
         property bool ownTrayIcon: false
         property string collapsedSections: ""
-        property alias winWidth: win.width
-        property alias winHeight: win.height
+        // The view as you left it.
+        property string sortKey: "cpu"
+        property bool sortDesc: true
+        property string filterText: ""
+        property string selectedKey: ""
+        property real scrollY: 0
+        property real scrollX: 0
+        property bool rootMode: false
     }
 
     Monitor {
@@ -213,6 +223,7 @@ ApplicationWindow {
             if (recount) Qt.callLater(updatePlan)
             for (const n of s.notices) showStatus(n)
         }
+        if (s.collapsedCount !== undefined) collapsedCount = s.collapsedCount
         if (s.rows) table.applyDiff(s.rows)
     }
 
@@ -222,11 +233,21 @@ ApplicationWindow {
         statusTimer.restart()
     }
     Timer { id: statusTimer; interval: 6000; onTriggered: win.status = "" }
+    // Scroll position and selection, saved shortly after they settle.
+    Timer {
+        id: viewSave
+        interval: 500
+        onTriggered: {
+            settings.scrollY = table.scrollY
+            settings.scrollX = table.scrollX
+            settings.sync()
+        }
+    }
 
     Component.onCompleted: {
         // Restarted by a rebuild (an instance was alive moments ago): come
         // back the way it was. A real login start stays in the tray.
-        if (startHidden && settings.lastVisible && Date.now() - settings.lastAlive < 30000) win.show()
+        if (startHidden && settings.lastVisible && Date.now() - settings.lastAlive < 30000) win.wantVisible = true
         booted = true
         // One-time: TIME+ is now hidden by default; apply that to saved settings too.
         if (settings.columnsVersion < 1) {
@@ -241,7 +262,14 @@ ApplicationWindow {
         mon.set_rows_enabled(win.visible)
         mon.set_view(settings.view)
         mon.set_show_kernel(settings.showKernel)
+        table.sortKey = settings.sortKey
+        table.sortDesc = settings.sortDesc
         mon.set_sort(table.sortKey, table.sortDesc)
+        filterField.text = settings.filterText
+        table.restoreKey = settings.selectedKey
+        table.restoreY = settings.scrollY
+        table.restoreX = settings.scrollX
+        if (settings.rootMode) mon.set_root_mode(true)
     }
 
     function setView(v) {
@@ -252,7 +280,7 @@ ApplicationWindow {
 
     // ---- window/tray plumbing (called from C++ for single-instance) -----
     function showWindow() {
-        win.show()
+        if (win.restoreMaximized) win.showMaximized(); else win.show()
         win.raise()
         win.requestActivate()
     }
@@ -360,19 +388,14 @@ ApplicationWindow {
                 ToolButton { text: "GPU"; checkable: true; checked: win.view === "gpu"; ButtonGroup.group: viewGroup; onClicked: win.setView("gpu"); icon.name: "video-display" }
                 ToolSeparator { visible: win.view === "tree" || win.view === "containers" }
                 ToolButton {
+                    // One toggle: expands everything if anything is collapsed,
+                    // otherwise collapses to the top-level processes.
                     visible: win.view === "tree" || win.view === "containers"
-                    icon.name: "expand-all"
-                    text: "Expand all"
-                    onClicked: mon.set_expanded_all(true)
-                    ToolTip.text: "Expand every branch of the tree (*)"
-                    ToolTip.visible: hovered
-                }
-                ToolButton {
-                    visible: win.view === "tree" || win.view === "containers"
-                    icon.name: "collapse-all"
-                    text: "Collapse all"
-                    onClicked: mon.set_expanded_all(false)
-                    ToolTip.text: "Collapse the tree to its top-level processes (_)"
+                    readonly property bool anyCollapsed: win.collapsedCount > 0
+                    icon.name: anyCollapsed ? "expand-all" : "collapse-all"
+                    text: anyCollapsed ? "Expand all" : "Collapse all"
+                    onClicked: mon.set_expanded_all(anyCollapsed)
+                    ToolTip.text: anyCollapsed ? "Expand every branch of the tree (*)" : "Collapse the tree to its top-level processes (_)"
                     ToolTip.visible: hovered
                 }
                 ToolSeparator {}
@@ -380,7 +403,7 @@ ApplicationWindow {
                     id: filterField
                     Layout.preferredWidth: 280
                     placeholderText: "Filter: name, command, user, container, PID  (/)"
-                    onTextChanged: mon.set_filter(text)
+                    onTextChanged: { mon.set_filter(text); settings.filterText = text }
                     Keys.onDownPressed: table.forceActiveFocus()
                     Keys.onReturnPressed: table.forceActiveFocus()
                 }
@@ -392,7 +415,7 @@ ApplicationWindow {
                     text: win.snap.root ? "root" : ""
                     checkable: true
                     checked: !!win.snap.root
-                    onClicked: mon.set_root_mode(!win.snap.root)
+                    onClicked: { settings.rootMode = !win.snap.root; mon.set_root_mode(!win.snap.root) }
                     ToolTip.text: win.snap.root
                         ? "Root access is on: every process's disk I/O, GPU use, executable path, environment and open files are visible, and signals to root's processes need no further prompts. Click to turn off."
                         : "Root access is off: other users' (e.g. root's) disk I/O, GPU use, paths, environment and files are hidden by the kernel. Click to turn it on (asks polkit once)."
@@ -428,7 +451,7 @@ ApplicationWindow {
                             checkable: true
                             checked: !!win.snap.root
                             enabled: !win.snap.rootStarting
-                            onTriggered: mon.set_root_mode(!win.snap.root)
+                            onTriggered: { settings.rootMode = !win.snap.root; mon.set_root_mode(!win.snap.root) }
                         }
                         MenuSeparator {}
                         MenuItem { text: "Show resources (r)"; checkable: true; checked: settings.showResources; onTriggered: settings.showResources = !settings.showResources }
@@ -975,6 +998,10 @@ ApplicationWindow {
             showContainerColumn: win.view !== "containers" && (win.snap.procs.containers || 0) > 0
             onNotice: (text) => win.showStatus(text)
             onShowDetails: (pid) => details.openFor(pid)
+            onSortKeyChanged: settings.sortKey = sortKey
+            onSortDescChanged: settings.sortDesc = sortDesc
+            onCurrentKeyChanged: if (restored) { settings.selectedKey = currentKey; viewSave.restart() }
+            onScrollMoved: viewSave.restart()
             letterHandler: win.letterKey
             hiddenColumns: settings.hiddenColumns.split(",").filter(x => x.length > 0)
             onHiddenColumnsChanged: settings.hiddenColumns = hiddenColumns.join(",")

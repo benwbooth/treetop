@@ -144,20 +144,31 @@ fn act(cmd: &str, rest: &[&str]) -> Value {
     json!({"ok": ok, "errors": errors})
 }
 
-/// `treetop --root-helper`: the loop that runs as root.
-pub fn helper_main() {
-    let gpu = gpu::spawn_poller();
-    let mut net = crate::net::NetAccounting::start();
-    let mut last = std::time::Instant::now();
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+/// How long the helper waits for treetop to come back after it exits, so a
+/// restart or rebuild reconnects without another password prompt.
+const LINGER: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// The helper's socket, in the authorizing user's private runtime directory
+/// (only they can reach it; connections are also checked by uid).
+fn socket_path(uid: u32) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/run/user/{uid}/treetop-root.sock"))
+}
+
+struct HelperState {
+    gpu: gpu::Shared,
+    net: crate::net::NetAccounting,
+    last: std::time::Instant,
+}
+
+/// Answers one client's requests until it disconnects.
+fn serve(input: impl BufRead, mut out: impl Write, st: &mut HelperState) {
     let _ = writeln!(out, "ready");
     let _ = out.flush();
-    for line in std::io::stdin().lock().lines() {
+    for line in input.lines() {
         let Ok(line) = line else { break };
         let parts: Vec<&str> = line.split_whitespace().collect();
         let reply = match parts.first().copied() {
-            Some("sample") => sample(&gpu, &mut net, &mut last),
+            Some("sample") => sample(&st.gpu, &mut st.net, &mut st.last),
             Some("inspect") => {
                 let pid = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
                 json!({"environ": inspect::environ(pid), "files": inspect::files(pid)})
@@ -166,9 +177,68 @@ pub fn helper_main() {
             Some("quit") | None => break,
             Some(_) => json!({"error": "unknown request"}),
         };
-        let _ = writeln!(out, "{reply}");
-        let _ = out.flush();
+        if writeln!(out, "{reply}").and_then(|_| out.flush()).is_err() {
+            break;
+        }
     }
+}
+
+/// The connecting process's uid (SO_PEERCRED).
+fn peer_uid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let r = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    (r == 0).then_some(cred.uid)
+}
+
+/// `treetop --root-helper`, run as root through pkexec. Serves treetop over
+/// stdin/stdout; when treetop exits it waits LINGER on a socket only the
+/// authorizing user can use, so a restart reconnects without a prompt.
+pub fn helper_main() {
+    let mut st = HelperState {
+        gpu: gpu::spawn_poller(),
+        net: crate::net::NetAccounting::start(),
+        last: std::time::Instant::now(),
+    };
+    serve(std::io::stdin().lock(), std::io::stdout().lock(), &mut st);
+
+    let Some(uid) = std::env::var("PKEXEC_UID").ok().and_then(|u| u.parse::<u32>().ok()) else { return };
+    let path = socket_path(uid);
+    let _ = std::fs::remove_file(&path);
+    let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) else { return };
+    if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) {
+        unsafe {
+            libc::chmod(c.as_ptr(), 0o600);
+            libc::chown(c.as_ptr(), uid, u32::MAX);
+        }
+    }
+    let _ = listener.set_nonblocking(true);
+    let mut deadline = std::time::Instant::now() + LINGER;
+    while std::time::Instant::now() < deadline {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if peer_uid(&stream) != Some(uid) {
+                    continue; // only the user who authorized us
+                }
+                let _ = stream.set_nonblocking(false);
+                if let Ok(reader) = stream.try_clone() {
+                    serve(BufReader::new(reader), stream, &mut st);
+                }
+                deadline = std::time::Instant::now() + LINGER;
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+        }
+    }
+    let _ = std::fs::remove_file(&path);
 }
 
 /// `treetop --inspect <pid>` (one-shot, run through pkexec).
@@ -206,16 +276,41 @@ fn self_exe() -> Result<String, String> {
     std::env::current_exe().map(|p| p.display().to_string()).map_err(|e| e.to_string())
 }
 
+enum Transport {
+    Child { _child: Child, stdin: ChildStdin, out: BufReader<ChildStdout> },
+    Socket { stream: std::os::unix::net::UnixStream, out: BufReader<std::os::unix::net::UnixStream> },
+}
+
 /// The running helper, as seen from the unprivileged side.
 pub struct Helper {
-    _child: Child,
-    stdin: ChildStdin,
-    out: BufReader<ChildStdout>,
+    t: Transport,
 }
 
 impl Helper {
-    /// Starts the helper through pkexec; blocks until polkit has answered.
+    /// Reconnects to a helper still waiting from a previous run (no prompt),
+    /// else starts one through pkexec (blocks while polkit asks).
     pub fn start() -> Result<Helper, String> {
+        if let Some(h) = Self::reconnect() {
+            return Ok(h);
+        }
+        Self::spawn()
+    }
+
+    fn reconnect() -> Option<Helper> {
+        let path = socket_path(unsafe { libc::getuid() });
+        let stream = std::os::unix::net::UnixStream::connect(&path).ok()?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).ok()?;
+        let mut out = BufReader::new(stream.try_clone().ok()?);
+        let mut first = String::new();
+        out.read_line(&mut first).ok()?;
+        if first.trim() != "ready" {
+            return None;
+        }
+        stream.set_read_timeout(None).ok()?;
+        Some(Helper { t: Transport::Socket { stream, out } })
+    }
+
+    fn spawn() -> Result<Helper, String> {
         let mut child = pkexec()
             .arg(self_exe()?)
             .arg("--root-helper")
@@ -236,14 +331,24 @@ impl Helper {
             let code = child.wait().ok().and_then(|s| s.code());
             return Err(pkexec_error(code, &err));
         }
-        Ok(Helper { _child: child, stdin, out })
+        Ok(Helper { t: Transport::Child { _child: child, stdin, out } })
     }
 
     pub fn request(&mut self, line: &str) -> Option<Value> {
-        writeln!(self.stdin, "{line}").ok()?;
-        self.stdin.flush().ok()?;
         let mut reply = String::new();
-        if self.out.read_line(&mut reply).ok()? == 0 {
+        let n = match &mut self.t {
+            Transport::Child { stdin, out, .. } => {
+                writeln!(stdin, "{line}").ok()?;
+                stdin.flush().ok()?;
+                out.read_line(&mut reply).ok()?
+            }
+            Transport::Socket { stream, out } => {
+                writeln!(stream, "{line}").ok()?;
+                stream.flush().ok()?;
+                out.read_line(&mut reply).ok()?
+            }
+        };
+        if n == 0 {
             return None;
         }
         serde_json::from_str(&reply).ok()

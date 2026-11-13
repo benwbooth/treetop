@@ -1,6 +1,13 @@
 #include "treetop_app.h"
 
+#include <QtCore/QSettings>
 #include <QtCore/QTimer>
+#include <QtGui/QScreen>
+#include <QtGui/QWindow>
+#if defined(TREETOP_WAYLAND_SESSION_RESTORE) && QT_CONFIG(wayland)
+#include <qpa/qplatformwindow_p.h>
+#endif
+#include <algorithm>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
 #include <QtDBus/QDBusVirtualObject>
@@ -44,6 +51,87 @@ public:
     }
 private:
     QObject *m_root;
+};
+}
+
+// Remembers the window's size, maximized state and screen (QSettings,
+// MainWindow group) and restores them; the position comes back through
+// KWin's session restore on Wayland (Qt 6.11+), or setPosition elsewhere.
+namespace {
+class WindowState final : public QObject
+{
+public:
+    explicit WindowState(QWindow *window) : QObject(window), m_window(window)
+    {
+        QSettings s;
+        s.beginGroup(QStringLiteral("MainWindow"));
+        QScreen *screen = window->screen();
+        const QString screenName = s.value(QStringLiteral("screen")).toString();
+        for (QScreen *c : QGuiApplication::screens())
+            if (c->name() == screenName) screen = c;
+        if (!screen) screen = QGuiApplication::primaryScreen();
+        if (screen) window->setScreen(screen);
+        m_normal = s.value(QStringLiteral("normalGeometry"), window->geometry()).toRect();
+        m_maximized = s.value(QStringLiteral("maximized"), false).toBool();
+        const bool known = s.contains(QStringLiteral("normalGeometry"));
+        s.endGroup();
+        if (screen) {
+            const QRect a = screen->availableGeometry();
+            m_normal.setWidth(std::clamp(m_normal.width(), std::min(window->minimumWidth(), a.width()), a.width()));
+            m_normal.setHeight(std::clamp(m_normal.height(), std::min(window->minimumHeight(), a.height()), a.height()));
+            m_normal.moveLeft(std::clamp(m_normal.x(), a.left(), a.right() - m_normal.width() + 1));
+            m_normal.moveTop(std::clamp(m_normal.y(), a.top(), a.bottom() - m_normal.height() + 1));
+        }
+        window->resize(m_normal.size());
+        if (!QGuiApplication::platformName().startsWith(QStringLiteral("wayland")) && known)
+            window->setPosition(m_normal.topLeft());
+#if defined(TREETOP_WAYLAND_SESSION_RESTORE) && QT_CONFIG(wayland)
+        if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
+            // The role must be set before show() creates the xdg_toplevel.
+            window->create();
+            if (auto *native = window->nativeInterface<QNativeInterface::Private::QWaylandWindow>())
+                native->setSessionRestoreId(QStringLiteral("treetop-main"));
+        }
+#endif
+        window->setProperty("restoreMaximized", m_maximized);
+        m_timer.setSingleShot(true);
+        m_timer.setInterval(300);
+        connect(&m_timer, &QTimer::timeout, this, [this] { save(); });
+        const auto later = [this] { m_timer.start(); };
+        connect(window, &QWindow::xChanged, this, later);
+        connect(window, &QWindow::yChanged, this, later);
+        connect(window, &QWindow::widthChanged, this, later);
+        connect(window, &QWindow::heightChanged, this, later);
+        connect(window, &QWindow::screenChanged, this, later);
+        connect(window, &QWindow::windowStateChanged, this, [this](Qt::WindowState st) {
+            if (st == Qt::WindowMaximized || st == Qt::WindowNoState) {
+                m_maximized = st == Qt::WindowMaximized;
+                m_window->setProperty("restoreMaximized", m_maximized);
+            }
+            m_timer.start();
+        });
+        connect(window, &QWindow::visibleChanged, this, [this](bool v) { if (!v) save(); });
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { save(); });
+    }
+    void showRestored() { if (m_maximized) m_window->showMaximized(); else m_window->showNormal(); }
+private:
+    void save()
+    {
+        m_timer.stop();
+        if (m_window->windowState() == Qt::WindowNoState && !m_maximized && m_window->isVisible())
+            m_normal = m_window->geometry();
+        QSettings s;
+        s.beginGroup(QStringLiteral("MainWindow"));
+        s.setValue(QStringLiteral("normalGeometry"), m_normal);
+        s.setValue(QStringLiteral("maximized"), m_maximized);
+        if (m_window->screen()) s.setValue(QStringLiteral("screen"), m_window->screen()->name());
+        s.endGroup();
+        s.sync();
+    }
+    QWindow *m_window;
+    QTimer m_timer;
+    QRect m_normal;
+    bool m_maximized = false;
 };
 }
 
@@ -102,6 +190,12 @@ int treetopRun(bool startHidden, bool toggle)
         return 1;
     }
     QObject *root = engine.rootObjects().constFirst();
+    if (auto *window = qobject_cast<QWindow *>(root)) {
+        auto *state = new WindowState(window);
+        // QML decided whether to start visible (tray start, rebuild restart).
+        if (root->property("wantVisible").toBool())
+            state->showRestored();
+    }
 
     static TreetopBus bus(root);
     QDBusConnection session = QDBusConnection::sessionBus();
