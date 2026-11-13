@@ -54,8 +54,8 @@ RowLayout {
         visible: stat.showGraph || stat.bar
         Layout.alignment: Qt.AlignVCenter
         Layout.preferredWidth: stat.inside
-            ? Math.max(valueInside.implicitWidth + 4, Math.round(stat.h * 1.25 * stat.graphWidthFactor))
-            : (stat.bar ? Math.round(stat.h * 0.4) : Math.round(stat.h * 1.25 * stat.graphWidthFactor))
+            ? Math.max(valueInside.implicitWidth + 4, Math.round(stat.h * 1.56 * stat.graphWidthFactor))
+            : (stat.bar ? Math.round(stat.h * 0.4) : Math.round(stat.h * 1.56 * stat.graphWidthFactor))
         Layout.preferredHeight: Math.round(stat.h * 0.62)
         color: "transparent"
         border.color: Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.55)
