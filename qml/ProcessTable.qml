@@ -26,6 +26,11 @@ FocusScope {
     property var letterHandler: null
     // Focus mode: the PID whose tree is shown alone (0: everything).
     property int focusPid: 0
+    // Tooltips stay out of the way of menus: hidden while a menu is open, and
+    // for a moment after any click (so one can't pop up over a context menu).
+    readonly property bool tipsBlocked: menu.opened || columnMenu.opened || tipHold.running
+    Timer { id: tipHold; interval: 1200 }
+    function holdTips() { tipHold.restart() }
     // Restored once rows first arrive: the selection and scroll position
     // from last time.
     property string restoreKey: ""
@@ -556,7 +561,7 @@ FocusScope {
                             elide: Text.ElideRight
                         }
                         HoverHandler { id: hh }
-                        ToolTip.visible: hh.hovered
+                        ToolTip.visible: hh.hovered && !table.tipsBlocked
                         ToolTip.delay: 600
                         ToolTip.timeout: 20000
                         ToolTip.text: "<b>" + modelData.title + "</b><br>" + modelData.tip
@@ -758,7 +763,7 @@ FocusScope {
                     readonly property var hoverCol: cellHover.hovered ? table.colAt(cellHover.point.position.x + 4) : null
                     readonly property string hoverFull: hoverCol ? String(rowItem.cell(hoverCol.key)) : ""
                     Loader {
-                        active: fixedText.hoverCol !== null && fixedText.hoverFull.length > fixedText.hoverCol.chars
+                        active: fixedText.hoverCol !== null && fixedText.hoverFull.length > fixedText.hoverCol.chars && !table.tipsBlocked
                         sourceComponent: ToolTip {
                             visible: true
                             delay: 400
@@ -836,7 +841,7 @@ FocusScope {
                                     table.monitor.toggle(rowItem.key)
                             }
                         }
-                        ToolTip.visible: canToggle && expHover.hovered
+                        ToolTip.visible: canToggle && expHover.hovered && !table.tipsBlocked
                         ToolTip.delay: 900
                         ToolTip.text: (rowItem.expanded ? "Collapse" : "Expand") + " · Shift+click: everything below · keys: ← → (+ −), Shift+← → scrolls"
                     }
@@ -875,7 +880,7 @@ FocusScope {
                         color: rowItem.current ? table.highlightTextColor : "#56b6e0"
                         anchors.verticalCenter: parent.verticalCenter
                         HoverHandler { id: aggHover }
-                        ToolTip.visible: aggHover.hovered
+                        ToolTip.visible: aggHover.hovered && !table.tipsBlocked
                         ToolTip.delay: 500
                         ToolTip.text: "Collapsed: CPU, memory, GPU, disk and network on this row are totals for these " + rowItem.aggCount + " processes (this one and everything below it)."
                     }
@@ -900,7 +905,7 @@ FocusScope {
                         Loader {
                             id: tipLoader
                             readonly property bool overTip: item ? item.hovered : false
-                            active: (cmdHover.hovered || overTip || tipGrace.running) && !rowItem.group && rowItem.command.length > 0
+                            active: (cmdHover.hovered || overTip || tipGrace.running) && !rowItem.group && rowItem.command.length > 0 && !table.tipsBlocked
                             onOverTipChanged: if (!overTip) tipGrace.restart()
                             sourceComponent: ToolTip {
                                 readonly property bool hovered: tipHover.hovered
@@ -937,6 +942,7 @@ FocusScope {
                     z: -1
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onPressed: (mouse) => {
+                        table.holdTips()
                         table.select(rowItem.index, false)
                         list.forceActiveFocus()
                         if (mouse.button === Qt.LeftButton && (mouse.modifiers & Qt.ControlModifier) && rowItem.pid > 0) {
