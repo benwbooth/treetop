@@ -830,14 +830,30 @@ FocusScope {
                         anchors.verticalCenter: parent.verticalCenter
                         // Hover: the whole command (full paths), one argument per
                         // line, in the monospace font. Created only while hovered.
-                        HoverHandler { id: cmdHover }
+                        // Hover: the whole command (full paths), one argument
+                        // per line. It opens beside the pointer (not on top of
+                        // it), stays while the pointer is on the row or the
+                        // tooltip, and closes only after a short grace period,
+                        // so a tall tooltip can't flicker on and off.
+                        HoverHandler {
+                            id: cmdHover
+                            onHoveredChanged: if (!hovered) tipGrace.restart()
+                        }
+                        Timer { id: tipGrace; interval: 350 }
                         Loader {
-                            active: cmdHover.hovered && !rowItem.group && rowItem.command.length > 0
+                            id: tipLoader
+                            readonly property bool overTip: item ? item.hovered : false
+                            active: (cmdHover.hovered || overTip || tipGrace.running) && !rowItem.group && rowItem.command.length > 0
+                            onOverTipChanged: if (!overTip) tipGrace.restart()
                             sourceComponent: ToolTip {
+                                readonly property bool hovered: tipHover.hovered
                                 visible: true
                                 delay: 700
-                                timeout: 60000
+                                timeout: -1
                                 font: table.font
+                                // Beside and below the pointer.
+                                x: cmdHover.point.position.x + 18
+                                y: tipLoader.parent ? tipLoader.parent.height + 6 : 0
                                 contentItem: Text {
                                     textFormat: Text.StyledText
                                     font: table.font
@@ -846,6 +862,7 @@ FocusScope {
                                     text: table.prettyCommand(rowItem.command, rowItem.exe)
                                         + "<br><br><font color='" + table.dimColor + "'>PID " + rowItem.pid + " · " + Fmt.escape(rowItem.user)
                                         + (rowItem.container ? " · ⬢ " + Fmt.escape(rowItem.container) : "") + "</font>"
+                                    HoverHandler { id: tipHover }
                                 }
                             }
                         }
