@@ -24,8 +24,19 @@ WheelHandler {
     property real tpVx: 0
     property real tpVy: 0
 
-    function clampY(y) { return Math.max(0, Math.min(y, Math.max(0, view.contentHeight - view.height))) }
-    function clampX(x) { return Math.max(0, Math.min(x, Math.max(0, view.contentWidth - view.width))) }
+    // The scroll range starts at the view's origin, not 0: a ListView with
+    // rows of varying height (wrapped text) moves its origin as it measures
+    // rows, and clamping to 0 parked the view where no rows exist (blank).
+    function clampY(y) {
+        const lo = view.originY - view.topMargin
+        const hi = Math.max(lo, view.originY + view.contentHeight - view.height + view.bottomMargin)
+        return Math.max(lo, Math.min(y, hi))
+    }
+    function clampX(x) {
+        const lo = view.originX - view.leftMargin
+        const hi = Math.max(lo, view.originX + view.contentWidth - view.width + view.rightMargin)
+        return Math.max(lo, Math.min(x, hi))
+    }
     function stop() { animY.stop(); animX.stop(); coast.stop(); fling.stop(); tpVx = 0; tpVy = 0 }
     function glideY(d) {
         if (!animY.running) targetY = view.contentY
