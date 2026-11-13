@@ -8,6 +8,7 @@
     <entry name="showMemory" type="Bool"><default>true</default></entry>
     <entry name="showGpu" type="Bool"><default>true</default></entry>
     <entry name="hiddenGpus" type="StringList"><default></default></entry>
+    <entry name="showVram" type="Bool"><default>true</default></entry>
     <entry name="showDisk" type="Bool"><default>true</default></entry>
     <!-- "usage": space used on diskSensor; "io": read+write rate -->
     <entry name="diskMode" type="String"><default>usage</default></entry>
@@ -15,7 +16,10 @@
     <entry name="showNetwork" type="Bool"><default>true</default></entry>
     <entry name="showGraphs" type="Bool"><default>true</default></entry>
     <entry name="colorLabels" type="Bool"><default>true</default></entry>
-    <entry name="graphWidth" type="Int"><default>100</default></entry>
+    <entry name="valuesInside" type="Bool"><default>true</default></entry>
+    <!-- "full" (CPU), "short" (C) or "none" -->
+    <entry name="labels" type="String"><default>short</default></entry>
+    <entry name="graphWidth" type="Int"><default>90</default></entry>
     <entry name="updateInterval" type="Int"><default>1000</default></entry>
   </group>
 </kcfg>

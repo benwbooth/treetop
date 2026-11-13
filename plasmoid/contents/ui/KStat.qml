@@ -16,13 +16,17 @@ RowLayout {
     property bool colorLabel: true
     property real graphWidthFactor: 1
     property real h: 22
+    // Draw the value on top of the graph (compact) instead of beside it.
+    property bool overlay: true
+    readonly property bool inside: overlay && (showGraph || bar)
 
-    spacing: Math.round(h * 0.14)
+    spacing: Math.round(h * 0.06)
 
     Text {
+        visible: stat.label.length > 0
         text: stat.label
         color: stat.colorLabel ? stat.color : Kirigami.Theme.textColor
-        font.pixelSize: Math.round(stat.h * 0.42)
+        font.pixelSize: Math.max(7, Math.round(stat.h * 0.22))
         font.bold: true
         renderType: Text.NativeRendering
         Layout.alignment: Qt.AlignVCenter
@@ -30,7 +34,9 @@ RowLayout {
     Rectangle {
         visible: stat.showGraph || stat.bar
         Layout.alignment: Qt.AlignVCenter
-        Layout.preferredWidth: stat.bar ? Math.round(stat.h * 0.55) : Math.round(stat.h * 1.25 * stat.graphWidthFactor)
+        Layout.preferredWidth: stat.inside
+            ? Math.max(valueInside.implicitWidth + 4, Math.round(stat.h * 1.0 * stat.graphWidthFactor))
+            : (stat.bar ? Math.round(stat.h * 0.4) : Math.round(stat.h * 1.0 * stat.graphWidthFactor))
         Layout.preferredHeight: Math.round(stat.h * 0.62)
         color: "transparent"
         border.color: Qt.rgba(stat.color.r, stat.color.g, stat.color.b, 0.55)
@@ -42,6 +48,20 @@ RowLayout {
             anchors.margins: 1
             height: Math.max(0, Math.min(1, stat.fill)) * (parent.height - 2)
             color: stat.color
+        }
+        Text {
+            id: valueInside
+            visible: stat.inside
+            z: 2
+            anchors.centerIn: parent
+            text: stat.value
+            color: Kirigami.Theme.textColor
+            font.pixelSize: Math.round(stat.h * 0.36)
+            font.bold: true
+            font.family: "monospace"
+            style: Text.Outline
+            styleColor: Qt.rgba(Kirigami.Theme.backgroundColor.r, Kirigami.Theme.backgroundColor.g, Kirigami.Theme.backgroundColor.b, 0.85)
+            renderType: Text.NativeRendering
         }
         Canvas {
             id: graph
@@ -74,9 +94,10 @@ RowLayout {
         }
     }
     Text {
+        visible: !stat.inside
         text: stat.value
         color: Kirigami.Theme.textColor
-        font.pixelSize: Math.round(stat.h * 0.42)
+        font.pixelSize: Math.round(stat.h * 0.36)
         font.family: "monospace"
         renderType: Text.NativeRendering
         Layout.alignment: Qt.AlignVCenter

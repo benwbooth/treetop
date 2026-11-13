@@ -8,6 +8,8 @@ KCM.SimpleKCM {
     property alias cfg_showCpu: showCpu.checked
     property alias cfg_showMemory: showMemory.checked
     property alias cfg_showGpu: showGpu.checked
+    property alias cfg_showVram: showVram.checked
+    property bool cfg_showVramDefault
     property var cfg_hiddenGpus: []
     property alias cfg_showDisk: showDisk.checked
     property string cfg_diskMode: "usage"
@@ -15,6 +17,10 @@ KCM.SimpleKCM {
     property alias cfg_showNetwork: showNetwork.checked
     property alias cfg_showGraphs: showGraphs.checked
     property alias cfg_colorLabels: colorLabels.checked
+    property alias cfg_valuesInside: valuesInside.checked
+    property bool cfg_valuesInsideDefault
+    property string cfg_labels: "short"
+    property string cfg_labelsDefault
     property alias cfg_graphWidth: graphWidth.value
     property alias cfg_updateInterval: interval.value
     // Defaults the dialog's "Defaults" button resets to (kept for KCM API).
@@ -42,6 +48,7 @@ KCM.SimpleKCM {
                 onToggled: setGpu(index, checked)
             }
         }
+        QQC2.CheckBox { id: showVram; visible: showGpu.checked; text: i18n("   GPU memory (VRAM)") }
         QQC2.CheckBox { id: showDisk; text: i18n("Disk") }
         QQC2.CheckBox { id: showNetwork; text: i18n("Network") }
 
@@ -66,6 +73,13 @@ KCM.SimpleKCM {
 
         QQC2.CheckBox { id: showGraphs; Kirigami.FormData.label: i18n("Look:"); text: i18n("History graphs") }
         QQC2.CheckBox { id: colorLabels; text: i18n("Coloured labels") }
+        QQC2.CheckBox { id: valuesInside; text: i18n("Values inside the graphs (compact)") }
+        QQC2.ComboBox {
+            Kirigami.FormData.label: i18n("Labels:")
+            model: [i18n("One letter (C, M, G…)"), i18n("Full (CPU, MEM…)"), i18n("None (colours only)")]
+            currentIndex: cfg_labels === "full" ? 1 : (cfg_labels === "none" ? 2 : 0)
+            onActivated: cfg_labels = ["short", "full", "none"][currentIndex]
+        }
         RowLayout {
             Kirigami.FormData.label: i18n("Graph width:")
             QQC2.Slider { id: graphWidth; from: 50; to: 250; stepSize: 10 }
