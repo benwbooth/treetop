@@ -7,7 +7,11 @@ your GPU (like amdgpu_top), and which Docker/Podman container each process
 belongs to. It lives in your tray and your panel, and stays out of the way
 until you want it.
 
-<!-- screenshots: docs/screenshots/main.png etc. go here -->
+![treetop's main window: live graphs for CPU, memory, GPU, VRAM, disk and network above a process tree, with folded branches showing Σ totals](docs/screenshots/main.png)
+
+The panel widget, KStats-style:
+
+![The treetop panel widget: CPU, memory, GPU and VRAM graphs, network rates and CPU/GPU temperatures](docs/screenshots/widget.png)
 
 ## What you get
 
