@@ -97,7 +97,15 @@ fn run() -> std::io::Result<()> {
     let mut geo = None;
     let mut redraw = true;
     let mut last_draw = Instant::now();
+    let mut last_reload = Instant::now();
+    app.reload_settings();
     loop {
+        // Settings the window changed meanwhile.
+        if last_reload.elapsed() > Duration::from_secs(2) {
+            last_reload = Instant::now();
+            app.save();
+            app.reload_settings();
+        }
         while let Ok(m) = rx.try_recv() {
             app.on_msg(m);
             redraw = true;

@@ -232,6 +232,7 @@ pub struct App {
     /// Asked for the sudo password: the main loop does that on the terminal.
     pub want_sudo: bool,
     restored: bool,
+    settings_mtime: Option<std::time::SystemTime>,
 }
 
 pub fn launcher() -> treetop_core::root::Launcher {
@@ -287,6 +288,7 @@ impl App {
             signals,
             want_sudo: false,
             restored: false,
+            settings_mtime: None,
         };
         // The engine starts with the shared settings.
         let o = &app.opts;
@@ -338,6 +340,46 @@ impl App {
                 }
             }
         });
+        self.settings_mtime = std::fs::metadata(settings::path()).and_then(|m| m.modified()).ok();
+    }
+
+    /// The Qt app changed the shared settings: take its new values (except
+    /// ones we've changed and not saved yet).
+    pub fn reload_settings(&mut self) {
+        let path = settings::path();
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if mtime == self.settings_mtime {
+            return;
+        }
+        let first = self.settings_mtime.is_none();
+        self.settings_mtime = mtime;
+        if first || !self.dirty.is_empty() {
+            return;
+        }
+        let n = Opts::load(&Settings::load());
+        let o = &mut self.opts;
+        if n.view != o.view {
+            self.engine.set_view(&n.view);
+        }
+        if n.sort_key != o.sort_key || n.sort_desc != o.sort_desc {
+            self.engine.set_sort(&n.sort_key, n.sort_desc);
+        }
+        if n.filter != o.filter {
+            self.engine.set_filter(&n.filter);
+        }
+        if n.show_kernel != o.show_kernel {
+            self.engine.set_show_kernel(n.show_kernel);
+        }
+        if n.interval != o.interval {
+            self.engine.set_interval(n.interval as i32);
+        }
+        if n.effective_store_style() != o.effective_store_style() {
+            self.engine.set_store_style(n.effective_store_style());
+        }
+        // Root mode stays as this session set it.
+        let root = o.root_mode;
+        *o = n;
+        o.root_mode = root;
     }
 
     fn mark(&mut self, k: &'static str) {
