@@ -37,6 +37,7 @@ pub fn help(fe: Frontend) -> Vec<(&'static str, &'static str)> {
         ("r", "collapse / expand resources"),
         ("K", "show kernel threads"),
         ("P / M / T", "sort by CPU / memory / time"),
+        ("Z", "hold the list still (new processes at the bottom, exited ones struck out); again to resume"),
         ("F3 / /", "filter"),
     ];
     match fe {

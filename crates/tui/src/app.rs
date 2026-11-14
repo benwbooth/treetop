@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 use treetop_core::columns::{self, Column, Layout};
 use treetop_core::layout::{self, GpuEntry, Histories};
@@ -28,6 +28,7 @@ pub enum Act {
     ToggleRoot,
     SetInterval(i64),
     ChooseView,
+    ToggleHold,
     Options,
     ToggleResources,
     ToggleCards,
@@ -208,7 +209,7 @@ pub enum Drag {
 
 pub struct App {
     pub engine: Engine,
-    pub tx: Sender<Msg>,
+    pub tx: SyncSender<Msg>,
     pub opts: Opts,
     dirty: HashSet<&'static str>,
     pub snap: Value,
@@ -234,6 +235,9 @@ pub struct App {
     /// The list holds still (same rows, same order): the pointer is over it,
     /// or you used it in the last few seconds.
     pub frozen: bool,
+    /// Hold the list still (Z / the Hold toggle): same rows, new processes
+    /// at the bottom, exited ones struck out.
+    pub held: bool,
     pub over_table: bool,
     pub last_input: Instant,
     pub drag: Option<Drag>,
@@ -262,7 +266,7 @@ pub fn launcher() -> treetop_core::root::Launcher {
 }
 
 impl App {
-    pub fn new(engine: Engine, tx: Sender<Msg>) -> App {
+    pub fn new(engine: Engine, tx: SyncSender<Msg>) -> App {
         let s = Settings::load();
         let opts = Opts::load(&s);
         let cur_key = s.str_or("selectedKey", "");
@@ -294,6 +298,7 @@ impl App {
             editing_filter: false,
             popup: None,
             frozen: false,
+            held: false,
             over_table: false,
             last_input: Instant::now() - Duration::from_secs(60),
             drag: None,
@@ -363,7 +368,7 @@ impl App {
         self.dirty.insert(k);
     }
 
-    /// Hold the list while the pointer is over it or you just used it.
+    /// Hold the order while the pointer is over the list or you just used it.
     pub fn update_hold(&mut self) {
         // The pointer counts while it last moved within 10 s (it may have
         // left the terminal without a word).
@@ -989,6 +994,11 @@ impl App {
                 self.engine.set_store_style(s);
                 self.hscroll = 0;
                 self.mark("storeStyle");
+            }
+            Act::ToggleHold => {
+                self.held = !self.held;
+                self.engine.set_held(self.held);
+                self.notify(if self.held { "Holding the list: new processes join at the bottom, exited ones are struck out (Z resumes)" } else { "Live again" });
             }
             Act::Help => self.popup = Some(Popup::Help(0)),
             Act::Quit => self.quit = true,

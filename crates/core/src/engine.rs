@@ -37,6 +37,9 @@ struct Shared {
     /// Pointer over the list: keep the order (atomic so hovering never
     /// waits on the sampler's lock).
     frozen: AtomicBool,
+    /// Hold the list still (you asked to): same rows, new ones at the
+    /// bottom, exited ones kept and struck out.
+    held: AtomicBool,
     root: Arc<Mutex<Option<crate::root::Helper>>>,
     root_starting: AtomicBool,
 }
@@ -55,8 +58,8 @@ impl Default for Engine {
 
 /// Lays out rows and returns only the ones that differ from what the UI has.
 ///
-/// `hold`: you're using the list (pointer over it, or just scrolled or
-/// typed), so keep its rows where they are: the same rows in the same order,
+/// `hold`: you asked the list to hold still, so keep its rows where they
+/// are: the same rows in the same order,
 /// with their numbers updated. A process that exited stays (dimmed) where it
 /// was; new ones join at the bottom. Everything catches up when the hold ends.
 fn row_diff(st: &mut State, hold: bool) -> Value {
@@ -142,6 +145,7 @@ impl Engine {
                 }),
                 wake: Condvar::new(),
                 frozen: AtomicBool::new(false),
+                held: AtomicBool::new(false),
                 root: root.clone(),
                 root_starting: AtomicBool::new(false),
             }),
@@ -238,7 +242,7 @@ impl Engine {
                     if st.rows_enabled {
                         // Hold the rows for a sample while you use the list;
                         // your own actions (sort, filter, fold) still apply.
-                        let hold = sampling && shared.frozen.load(Ordering::Relaxed);
+                        let hold = sampling && shared.held.load(Ordering::Relaxed);
                         out["rows"] = row_diff(&mut st, hold);
                     }
                     drop(st);
@@ -372,6 +376,14 @@ impl Engine {
     /// Show only this process's tree (0 shows everything again).
     pub fn set_focus(&self, pid: i32) {
         self.with_state(|s| s.procs.focus = (pid > 0).then_some(pid));
+    }
+
+    /// Hold the list still (true), or let it catch up (false).
+    pub fn set_held(&self, held: bool) {
+        self.shared.held.store(held, Ordering::Relaxed);
+        if !held {
+            self.refresh();
+        }
     }
 
     pub fn set_frozen(&self, frozen: bool) {

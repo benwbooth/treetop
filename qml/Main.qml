@@ -140,6 +140,10 @@ ApplicationWindow {
         id: mon
         onUpdated: (json) => win.apply(JSON.parse(json))
     }
+    // Hold: the list keeps its rows (new processes at the bottom, exited
+    // ones struck out) until you release it. Z or the toolbar button.
+    property bool held: false
+    onHeldChanged: { mon.set_held(held); showStatus(held ? "Holding the list: new processes join at the bottom, exited ones are struck out (Z resumes)" : "Live again") }
     property bool booted: false
     property bool autostart: false
     onVisibleChanged: {
@@ -320,6 +324,7 @@ ApplicationWindow {
     function letterKey(t) {
         switch (t) {
         case "/": filterField.forceActiveFocus(); return true
+        case "Z": win.held = !win.held; return true
         case "t": win.setView(win.view === "tree" ? "flat" : "tree"); return true
         case "c": win.setView(win.view === "containers" ? "tree" : "containers"); return true
         case "K": settings.showKernel = !settings.showKernel; mon.set_show_kernel(settings.showKernel); table.refreshRows(); return true
@@ -485,6 +490,19 @@ ApplicationWindow {
                     Keys.onReturnPressed: table.forceActiveFocus()
                 }
                 CheckBox { visible: !toolbar.compact; text: "Kernel threads"; checked: settings.showKernel; onToggled: { settings.showKernel = checked; mon.set_show_kernel(checked); table.refreshRows() } }
+                ToolButton {
+                    icon.name: "media-playback-pause-symbolic"
+                    text: "Hold"
+                    display: toolbar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
+                    checkable: true
+                    checked: win.held
+                    onClicked: win.held = !win.held
+                    ToolTip.text: win.held
+                        ? "Holding: the list keeps its rows; new processes join at the bottom and exited ones are struck out. Click (or Z) to go live."
+                        : "Hold the list still: no rows move; new processes join at the bottom, exited ones are struck out (Z)"
+                    ToolTip.visible: hovered && tips.armed
+                    ToolTip.delay: 600
+                }
                 Item { Layout.fillWidth: true }
                 ToolButton {
                     // Root mode indicator / switch.
@@ -1128,8 +1146,8 @@ ApplicationWindow {
                 }
                 Item { Layout.fillWidth: true }
                 Text {
-                    visible: table.frozen
-                    text: "⏸ list held still while you use it  "
+                    visible: win.held
+                    text: "⏸ held · Z resumes  "
                     font: win.mono
                     color: win.dimColor
                 }

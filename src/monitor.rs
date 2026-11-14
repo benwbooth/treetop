@@ -56,6 +56,9 @@ pub mod qobject {
         fn set_show_kernel(self: &Monitor, show: bool);
         #[qinvokable]
         fn set_frozen(self: &Monitor, frozen: bool);
+        /// Hold the list still (new processes at the bottom, exited ones kept).
+        #[qinvokable]
+        fn set_held(self: &Monitor, held: bool);
         /// Show only this process's tree (0 shows everything again).
         #[qinvokable]
         fn set_focus(self: &Monitor, pid: i32);
@@ -346,6 +349,10 @@ impl qobject::Monitor {
 
     fn set_frozen(&self, frozen: bool) {
         self.engine.set_frozen(frozen);
+    }
+
+    fn set_held(&self, held: bool) {
+        self.engine.set_held(held);
     }
 
     fn set_root_mode(&self, on: bool) {

@@ -154,6 +154,7 @@ pub fn key(app: &mut App, k: KeyEvent) {
         KeyCode::Char('c') => app.run(Act::ToggleView("containers")),
         KeyCode::Char('g') => app.run(Act::ToggleView("gpu")),
         KeyCode::Char('K') => app.run(Act::ToggleKernel),
+        KeyCode::Char('Z') => app.run(Act::ToggleHold),
         KeyCode::Char('P') => app.sort_desc_by("cpu"),
         KeyCode::Char('M') => app.sort_desc_by("mem"),
         KeyCode::Char('T') => app.sort_desc_by("time"),

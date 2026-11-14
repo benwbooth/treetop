@@ -85,17 +85,41 @@ extern "C" fn on_quit_signal(_: libc::c_int) {
     QUIT.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// Makes sure we leave when asked (TERM/HUP/INT) or when our terminal is
+/// gone, even if the terminal library is stuck reading a dead terminal (it
+/// can spin there forever). The main loop gets a moment to save and leave
+/// properly first.
+fn watchdog() {
+    std::thread::Builder::new()
+        .name("treetop-watchdog".into())
+        .spawn(|| loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let mut t: libc::termios = unsafe { std::mem::zeroed() };
+            if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut t) } != 0 {
+                QUIT.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            if QUIT.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1500));
+                std::process::exit(0);
+            }
+        })
+        .ok();
+}
+
 fn run() -> std::io::Result<()> {
     for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
         unsafe { libc::signal(sig, on_quit_signal as *const () as usize) };
     }
     let engine = Engine::new();
-    let (tx, rx) = mpsc::channel::<Msg>();
+    // Bounded: if the screen ever stops taking updates, the engine skips
+    // them instead of queueing them up without end.
+    let (tx, rx) = mpsc::sync_channel::<Msg>(8);
     let mut app = App::new(engine.clone(), tx.clone());
     {
         let tx = tx.clone();
-        engine.start(move |v| tx.send(Msg::Update(v)).is_ok());
+        engine.start(move |v| !matches!(tx.try_send(Msg::Update(v)), Err(mpsc::TrySendError::Disconnected(_))));
     }
+    watchdog();
     if app.opts.root_mode {
         let on = true;
         app.set_root(on);

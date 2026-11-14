@@ -181,6 +181,8 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
         g.hits.push((Rect::new(x, y, fw, 1), Hit::Filter));
         x += fw + 2;
     }
+    let hold_style = if app.held { Style::default().bg(theme::over_bg(theme::YELLOW, 0.35)).fg(theme::text()).add_modifier(Modifier::BOLD) } else { st(theme::text()) };
+    item(buf, g, &mut x, if app.held { " ‖ Held " } else { " ‖ Hold " }, hold_style, Hit::Act(Act::ToggleHold));
     let k = if app.opts.show_kernel { "☑ Kernel threads" } else { "☐ Kernel threads" };
     item(buf, g, &mut x, k, st(theme::text()), Hit::Act(Act::ToggleKernel));
     // Right side: root, update interval, options.
@@ -1012,9 +1014,10 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
                 }
             }
         }
-        let strike = if exited { Modifier::CROSSED_OUT } else { Modifier::empty() };
         for sx in 0..r.width {
             let li = sx as usize + app.hscroll;
+            // An exited process's command is struck out (not its numbers).
+            let strike = if exited && li > cmd_start { Modifier::CROSSED_OUT } else { Modifier::empty() };
             let bg = theme::c(bgs.get(li).copied().unwrap_or(row_bg));
             let cell = &mut buf[(sx, y)];
             cell.set_bg(bg);
@@ -1093,8 +1096,8 @@ fn footer(buf: &mut Buffer, app: &App, g: &mut Geometry, y: u16, w: u16) {
         x += kn + ln;
     }
     let mut right = String::new();
-    if app.frozen {
-        right.push_str("‖ list held still while you use it   ");
+    if app.held {
+        right.push_str("‖ held · Z resumes   ");
     }
     if let Some(s) = app.status_text() {
         right.push_str(s);
@@ -1552,7 +1555,7 @@ mod tests {
         // Hermetic: our own empty settings.
         let dir = std::env::temp_dir().join(format!("treetop-tui-test-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &dir);
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(8);
         let mut app = App::new(treetop_core::Engine::new(), tx);
         app.on_msg(Msg::Update(fixture()));
         let s = render(&mut app);

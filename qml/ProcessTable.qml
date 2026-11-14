@@ -78,9 +78,9 @@ FocusScope {
         monitor.set_store_style(effectiveStoreStyle)
         monitor.set_palette(darkBase, String(textColor))
     }
-    // The list holds still (same rows, same order) while you're using it:
-    // the pointer is over it, or you scrolled, clicked or typed in it in the
-    // last few seconds. It catches up after.
+    // The order holds while you're using the list: the pointer is over it,
+    // or you scrolled, clicked or typed in it in the last few seconds.
+    // (Holding the rows themselves is the Hold button / Z.)
     readonly property bool frozen: listHover.hovered || interacting.running
     onFrozenChanged: if (monitor) monitor.set_frozen(frozen)
     Timer { id: interacting; interval: 3000 }
@@ -671,7 +671,7 @@ FocusScope {
                 readonly property bool isTagged: !!table.tagged[pid]
                 // Exited: kept in place (dimmed) while the list holds still.
                 required property bool exited
-                // Exited processes are struck out.
+                // An exited process's command is struck out.
                 readonly property font rowFont: Qt.font({ family: table.font.family, pointSize: table.font.pointSize, strikeout: exited })
                 readonly property color fg: current ? table.highlightTextColor : (kernel || exited ? table.dimColor : table.textColor)
                 readonly property color chip: container.length > 0 && container !== "Host" ? Qt.hsla(Fmt.hue(container), 0.6, 0.55, 1) : "transparent"
@@ -763,7 +763,7 @@ FocusScope {
                             font: table.font
                         }
                     }
-                    font: rowItem.rowFont
+                    font: table.font
                     color: rowItem.fg
                     clip: true
                 }
