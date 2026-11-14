@@ -222,7 +222,11 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
         app.mouse_moved = Instant::now();
     }
     // The order holds still while the pointer is over the list.
-    app.over_table = in_table(g, x, y) && app.popup.is_none();
+    // Terminals don't say when the pointer leaves them: a last position on
+    // the screen's outer edge means it went out that way.
+    let (w, h) = crossterm::terminal::size().unwrap_or((u16::MAX, u16::MAX));
+    let edge = x == 0 || y == 0 || x + 1 >= w || y + 1 >= h;
+    app.over_table = in_table(g, x, y) && app.popup.is_none() && !edge;
     if !matches!(m.kind, MouseEventKind::Moved) && app.over_table {
         app.last_input = Instant::now();
     }

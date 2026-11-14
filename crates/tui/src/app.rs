@@ -365,7 +365,10 @@ impl App {
 
     /// Hold the list while the pointer is over it or you just used it.
     pub fn update_hold(&mut self) {
-        let hold = self.over_table || self.last_input.elapsed() < Duration::from_secs(3);
+        // The pointer counts while it last moved within 10 s (it may have
+        // left the terminal without a word).
+        let pointer = self.over_table && self.mouse_moved.elapsed() < Duration::from_secs(10);
+        let hold = pointer || self.last_input.elapsed() < Duration::from_secs(3);
         if hold != self.frozen {
             self.frozen = hold;
             self.engine.set_frozen(hold);
