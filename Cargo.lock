@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "treetop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "treetop-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "serde_json",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "treetop-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossterm",
  "libc",
