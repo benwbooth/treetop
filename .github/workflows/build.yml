@@ -21,7 +21,56 @@ jobs:
       - name: Build
         run: nix build -L .#default
       - name: Smoke test
-        run: ./result/bin/treetop --help
+        run: |
+          ./result/bin/treetop --help
+          ./result/bin/treetop-tui --self-test
+      - name: Terminal version
+        run: nix build -L .#treetop-tui -o result-tui && ./result-tui/bin/treetop-tui --version
+
+  tui:
+    name: Terminal static (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.arch }}-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - name: musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools file
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.TARGET }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: tui-${{ matrix.arch }}
+      - name: Build
+        run: cargo build -p treetop-tui --profile release-tui --locked --target "$TARGET"
+      - name: Check it's static and runs
+        run: |
+          f="target/$TARGET/release-tui/treetop-tui"
+          file "$f"
+          file "$f" | grep -q 'static'
+          "$f" --version
+          "$f" --self-test
+          v="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || v="$(git rev-parse --short HEAD)"
+          cp "$f" "treetop-tui-$v-${{ matrix.arch }}-linux-musl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: treetop-tui-${{ matrix.arch }}
+          path: treetop-tui-*-linux-musl
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: treetop-tui-*-linux-musl
 
   appimage:
     name: AppImage
@@ -47,7 +96,7 @@ jobs:
       - name: Build
         run: |
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
-          cargo build --release --locked
+          cargo build -p treetop --release --locked
 
       - name: Package
         env:

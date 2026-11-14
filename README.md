@@ -68,6 +68,12 @@ The panel widget, KStats-style:
   treetop asks once through polkit (your normal password prompt) and runs a
   small helper that only reads `/proc` and sends signals.
 
+**In a terminal, too**
+- `treetop-tui` is the same monitor in a terminal — same columns, keys,
+  menus, details and settings — as a single static binary that runs on any
+  Linux (x86_64 or ARM), including over SSH. See
+  [the terminal version](#the-terminal-version).
+
 ## Install
 
 ### AppImage (any Linux distribution)
@@ -118,6 +124,20 @@ cargo build --release
 ./target/release/treetop
 ```
 
+### The terminal version
+
+Download `treetop-tui-<version>-x86_64-linux-musl` (or `-aarch64-…` for ARM)
+from the [latest release](https://github.com/benwbooth/treetop/releases/latest):
+
+```sh
+chmod +x treetop-tui-*-linux-musl
+./treetop-tui-*-linux-musl
+```
+
+It's one static file with no dependencies; copy it to any Linux machine.
+With Nix: `nix run github:benwbooth/treetop#treetop-tui` (the NixOS package
+above includes it too).
+
 ## Getting started
 
 - **Open it** from your application menu (*treetop*), or run `treetop`.
@@ -153,6 +173,22 @@ folded branches, sections — is remembered for next time.
 | `/` or `F3` | filter |
 | `Esc` / `q` | hide to the tray |
 | `Ctrl+=` / `Ctrl+-` | font size |
+
+### In the terminal
+
+`treetop-tui` works like the window: the same keys (press `h`), and the
+mouse too — click to select, right-click for the signal or column menu,
+double-click to focus, drag headers to move columns and column gaps to
+resize them, wheel to scroll (Shift+wheel sideways), hover for the same
+explanations as the window's tooltips. `F2` or ☰ opens the options.
+
+- It shares settings with the window (`~/.config/treetop/treetop.conf`):
+  columns, widths, order, sort, filter, hidden GPUs and folded branches.
+- `q`, `F10` or Ctrl+Q quits (there's no tray to hide in).
+- Root access asks through polkit on a desktop; over SSH or on a console it
+  asks for your `sudo` password on the terminal.
+- Colours are true colour where the terminal supports it (most do), else
+  the nearest of 256.
 
 ## Good to know
 

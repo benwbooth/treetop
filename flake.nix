@@ -24,6 +24,9 @@
           version = cargoToml.package.version;
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
+          # The window and the terminal version (both in bin/).
+          cargoBuildFlags = [ "-p" "treetop" "-p" "treetop-tui" ];
+          cargoTestFlags = [ "-p" "treetop-core" ];
           nativeBuildInputs = [ pkgs.pkg-config pkgs.qt6.wrapQtAppsHook pkgs.makeWrapper ];
           buildInputs = qtModules;
           preBuild = ''
@@ -41,6 +44,28 @@
             homepage = "https://github.com/benwbooth/treetop";
             license = pkgs.lib.licenses.mit;
             mainProgram = "treetop";
+            platforms = pkgs.lib.platforms.linux;
+          };
+        };
+
+        # The terminal version alone: no Qt. (Release binaries for any
+        # distribution are static musl builds from CI.)
+        packages.treetop-tui = pkgs.rustPlatform.buildRustPackage {
+          pname = "treetop-tui";
+          version = cargoToml.package.version;
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          cargoBuildFlags = [ "-p" "treetop-tui" ];
+          cargoTestFlags = [ "-p" "treetop-core" "-p" "treetop-tui" ];
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          postInstall = ''
+            wrapProgram $out/bin/treetop-tui --suffix PATH : ${runtimePath}
+          '';
+          meta = {
+            description = "htop-style system monitor in the terminal: process tree, GPU, containers, sensors";
+            homepage = "https://github.com/benwbooth/treetop";
+            license = pkgs.lib.licenses.mit;
+            mainProgram = "treetop-tui";
             platforms = pkgs.lib.platforms.linux;
           };
         };
