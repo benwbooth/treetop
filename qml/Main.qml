@@ -364,11 +364,19 @@ ApplicationWindow {
                     id: menuButton
                     icon.name: "application-menu"
                     ToolTip.text: "Options"
-                    ToolTip.visible: hovered && tips.armed
+                    ToolTip.visible: hovered && tips.armed && !optionsMenu.visible
                     // A second click closes it (the press that closed the
                     // menu mustn't open it again).
                     property real closedAt: 0
-                    onClicked: if (Date.now() - closedAt > 300) optionsMenu.popup(this, 0, height)
+                    // Was the menu open when you pressed? Then this click
+                    // only closes it (it may close before or after the click).
+                    property bool wasOpen: false
+                    onPressed: wasOpen = optionsMenu.visible || Date.now() - closedAt < 400
+                    onClicked: {
+                        if (wasOpen || optionsMenu.visible) optionsMenu.close()
+                        else optionsMenu.popup(this, 0, height)
+                        wasOpen = false
+                    }
                     Menu {
                         id: optionsMenu
                         onClosed: { tips.disarm(); menuButton.closedAt = Date.now() }
@@ -443,7 +451,13 @@ ApplicationWindow {
                     icon.name: cur.i
                     text: cur.t + "  ▾"
                     property real closedAt: 0
-                    onClicked: if (Date.now() - closedAt > 300) viewMenu.popup(this, 0, height)
+                    property bool wasOpen: false
+                    onPressed: wasOpen = viewMenu.visible || Date.now() - closedAt < 400
+                    onClicked: {
+                        if (wasOpen || viewMenu.visible) viewMenu.close()
+                        else viewMenu.popup(this, 0, height)
+                        wasOpen = false
+                    }
                     ToolTip.text: "View: the process tree, a flat list, grouped by container, or the GPU view"
                     ToolTip.visible: hovered && !viewMenu.visible && tips.armed
                     ToolTip.delay: 600

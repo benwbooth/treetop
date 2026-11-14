@@ -980,6 +980,8 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
             line.push(&format!("×{agg} "), st(hex(theme::AGG)).add_modifier(Modifier::BOLD));
         }
         let cmd_text = row["cmdText"].as_str().unwrap_or("");
+        // Where the command itself starts (after the tree lines, ▸, badge, ×N).
+        let text_at = line.len();
         if group || exited {
             line.push(cmd_text, st(theme::dim()));
         } else if current {
@@ -1017,7 +1019,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
         for sx in 0..r.width {
             let li = sx as usize + app.hscroll;
             // An exited process's command is struck out (not its numbers).
-            let strike = if exited && li > cmd_start { Modifier::CROSSED_OUT } else { Modifier::empty() };
+            let strike = if exited && li >= text_at { Modifier::CROSSED_OUT } else { Modifier::empty() };
             let bg = theme::c(bgs.get(li).copied().unwrap_or(row_bg));
             let cell = &mut buf[(sx, y)];
             cell.set_bg(bg);
