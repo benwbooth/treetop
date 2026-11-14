@@ -918,8 +918,9 @@ impl App {
                 self.mark("interval");
             }
             Act::ChooseInterval => {
+                // Under the Update button, at the right.
                 let items = self.interval_items();
-                self.open_menu(items, 0, 1);
+                self.open_menu(items, u16::MAX, 1);
             }
             Act::Options => {
                 let items = self.options_menu();
