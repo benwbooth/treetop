@@ -176,6 +176,10 @@ folded branches, sections — is remembered for next time.
 
 ### In the terminal
 
+![treetop-tui in a terminal: graph cards, packed CPU/memory/GPU/system/sensor meters, and the process tree with folded branches](docs/screenshots/terminal.png)
+
+![treetop-tui's GPU view: busy, memory bus and per-engine meters, clocks, temperatures, power and fan](docs/screenshots/terminal-gpu.png)
+
 `treetop-tui` works like the window: the same keys (press `h`), and the
 mouse too — click to select, right-click for the signal or column menu,
 double-click to focus, drag headers to move columns and column gaps to
