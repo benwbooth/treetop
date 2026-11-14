@@ -7,7 +7,7 @@ your GPU (like amdgpu_top), and which Docker/Podman container each process
 belongs to. It lives in your tray and your panel, and stays out of the way
 until you want it.
 
-![treetop's main window: live graphs for CPU, memory, GPU, VRAM, disk and network above a process tree, with folded branches showing Σ totals](docs/screenshots/main.png)
+![treetop's main window: live graphs for CPU, memory, GPU, VRAM, disk and network above a process tree, with folded branches showing their totals](docs/screenshots/main.png)
 
 The panel widget, KStats-style:
 
@@ -18,8 +18,8 @@ The panel widget, KStats-style:
 **A process tree you can actually use**
 - Every process with htop's tree lines; click ▸/▾ to fold a branch
   (Shift+click folds or unfolds everything below it).
-- A folded branch shows **Σ totals** for everything inside it — CPU, memory,
-  GPU, disk and network — so `Σ214` on `systemd --user` tells you what your
+- A folded branch shows **totals** for everything inside it — CPU, memory,
+  GPU, disk and network — so `×214` on `systemd --user` tells you what your
   whole session is using.
 - Sort by any column; the list stays calm (idle processes don't reshuffle,
   and the order holds still while your pointer is over it).

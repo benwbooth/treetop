@@ -381,7 +381,7 @@ fn left(app: &mut App, g: &Geometry, hit: Option<Hit>, x: u16, y: u16, double: b
                 }
             }
         }
-        Some(Hit::Row(i)) | Some(Hit::Command(i)) | Some(Hit::Cell(i, _)) | Some(Hit::Sigma(i)) => {
+        Some(Hit::Row(i)) | Some(Hit::Command(i)) | Some(Hit::Cell(i, _)) | Some(Hit::Total(i)) => {
             app.select(i);
             if ctrl {
                 let p = app.cur_pid;
@@ -448,7 +448,7 @@ fn right(app: &mut App, g: &Geometry, hit: Option<Hit>, x: u16, y: u16) {
         return;
     }
     match hit {
-        Some(Hit::Row(i)) | Some(Hit::Command(i)) | Some(Hit::Cell(i, _)) | Some(Hit::Sigma(i)) | Some(Hit::Expander(i)) => {
+        Some(Hit::Row(i)) | Some(Hit::Command(i)) | Some(Hit::Cell(i, _)) | Some(Hit::Total(i)) | Some(Hit::Expander(i)) => {
             app.select(i);
             let items = app.signal_menu();
             app.open_menu(items, x, y);

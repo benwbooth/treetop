@@ -23,7 +23,7 @@ const HELP: &str = "treetop-tui — an htop-style system monitor in your termina
 
 USAGE: treetop-tui [--help] [--version] [--self-test]
 
-Process tree with folding and Σ totals, CPU/memory/GPU/disk/network graphs,
+Process tree with folding and ×N totals, CPU/memory/GPU/disk/network graphs,
 every temperature and fan, Docker/Podman containers, per-process GPU use,
 and root access (polkit, or sudo over SSH). Press h inside for the keys.
 

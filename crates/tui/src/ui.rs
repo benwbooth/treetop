@@ -27,7 +27,7 @@ pub enum Hit {
     Command(usize),
     /// A fixed cell (row, column key): tooltip when cut off.
     Cell(usize, &'static str),
-    Sigma(usize),
+    Total(usize),
     Header(&'static str),
     Gap(&'static str),
     Table,
@@ -855,7 +855,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
     // Rows, with a vertical scrollbar at the right and, when lines are
     // wider than the screen, a horizontal one along the bottom.
     let full = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
-    // Widest line: the fixed columns, then tree lines, ▸, badge, Σ, command.
+    // Widest line: the fixed columns, then tree lines, ▸, badge, ×N, command.
     let widest = app
         .rows
         .iter()
@@ -948,7 +948,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
             }
             line.push(&format::pad(text, c.chars, c.right), st(color));
         }
-        // Command column: container stripe, tree lines, ▸/▾, badge, Σ, command.
+        // Command column: container stripe, tree lines, ▸/▾, badge, ×N, command.
         let cmd_start = line.len();
         line.push(if chip.is_some() && !group { "▎" } else { " " }, st(chip.map(theme::c).unwrap_or(fg)));
         let mut prefix = row["prefix"].as_str().unwrap_or("").to_string();
@@ -974,7 +974,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
         let mut sigma = None;
         if agg > 0 {
             sigma = Some(line.len());
-            line.push(&format!("Σ{agg} "), st(hex(theme::AGG)).add_modifier(Modifier::BOLD));
+            line.push(&format!("×{agg} "), st(hex(theme::AGG)).add_modifier(Modifier::BOLD));
         }
         let cmd_text = row["cmdText"].as_str().unwrap_or("");
         if group {
@@ -1044,8 +1044,8 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
             }
         }
         if let Some(at) = sigma {
-            if let Some(rr) = to_screen(at, format!("Σ{agg}").chars().count()) {
-                g.hits.push((rr, Hit::Sigma(i)));
+            if let Some(rr) = to_screen(at, format!("×{agg}").chars().count()) {
+                g.hits.push((rr, Hit::Total(i)));
             }
         }
         if let Some(at) = exp {
@@ -1411,7 +1411,7 @@ fn tooltip(buf: &mut Buffer, app: &App, g: &Geometry, area: Rect) {
     let Some(hit) = g.at(mx, my) else { return };
     // Tooltips sit under other hits (a card's click): find the tip-bearing one.
     let tip_hit = g.hits.iter().rev().filter(|(r, _)| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height).map(|(_, h)| h).find(|h| {
-        matches!(h, Hit::Tip(_) | Hit::Header(_) | Hit::Gap(_) | Hit::Cell(..) | Hit::Sigma(_) | Hit::Command(_) | Hit::Expander(_))
+        matches!(h, Hit::Tip(_) | Hit::Header(_) | Hit::Gap(_) | Hit::Cell(..) | Hit::Total(_) | Hit::Command(_) | Hit::Expander(_))
     });
     let Some(h) = tip_hit.or(Some(hit)) else { return };
     let (delay, lines): (u128, Vec<(String, Style)>) = match h {
@@ -1426,9 +1426,9 @@ fn tooltip(buf: &mut Buffer, app: &App, g: &Geometry, area: Rect) {
         }
         Hit::Gap(_) => (600, vec![("Drag to resize · double-click to fit all columns".into(), st(theme::text()))]),
         Hit::Expander(_) => (600, vec![("Collapse/Expand · Shift+click: everything below · keys: +/− ←/→, Ctrl+→/← everything below".into(), st(theme::text()))]),
-        Hit::Sigma(i) => {
+        Hit::Total(i) => {
             let n1 = app.rows.get(*i).and_then(|r| r["aggCount"].as_i64()).unwrap_or(0);
-            (500, wrap(&format!("Σ: the values on this folded row are totals for {n1} processes (it and everything below it). Expand it to see each one."), 60).into_iter().map(|l| (l, st(theme::text()))).collect())
+            (500, wrap(&format!("×{n1}: the values on this folded row are totals for {n1} processes (it and everything below it). Expand it to see each one."), 60).into_iter().map(|l| (l, st(theme::text()))).collect())
         }
         Hit::Cell(i, k) => {
             let c = columns::COLUMNS.iter().find(|c| c.key == *k).unwrap();
@@ -1554,7 +1554,7 @@ mod tests {
         let mut app = App::new(treetop_core::Engine::new(), tx);
         app.on_msg(Msg::Update(fixture()));
         let s = render(&mut app);
-        for want in ["Tree", "Resources", "CPU", "Memory", "GPU 1", "VRAM 1", "Disk", "Network", "PID", "systemd", "Σ3", "F9", "Test GPU"] {
+        for want in ["Tree", "Resources", "CPU", "Memory", "GPU 1", "VRAM 1", "Disk", "Network", "PID", "systemd", "×3", "F9", "Test GPU"] {
             assert!(s.contains(want), "{want:?} missing from:\n{s}");
         }
         app.run(crate::app::Act::SignalMenu);

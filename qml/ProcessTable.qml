@@ -839,7 +839,7 @@ FocusScope {
                     // Collapsed branch: its numbers are the subtree's totals.
                     Text {
                         visible: rowItem.aggCount > 0
-                        text: "Σ" + rowItem.aggCount + " "
+                        text: "×" + rowItem.aggCount + " "
                         font.family: table.font.family
                         font.pointSize: table.font.pointSize
                         font.bold: true
