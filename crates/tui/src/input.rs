@@ -40,8 +40,6 @@ fn activate(app: &mut App, level: usize, i: usize) {
 
 pub fn key(app: &mut App, k: KeyEvent) {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = k.modifiers.contains(KeyModifiers::SHIFT);
-    let alt = k.modifiers.contains(KeyModifiers::ALT);
     if ctrl && matches!(k.code, KeyCode::Char('q') | KeyCode::Char('c')) {
         app.quit = true;
         return;
@@ -109,6 +107,8 @@ pub fn key(app: &mut App, k: KeyEvent) {
                 KeyCode::Home => d.scroll[d.tab] = 0,
                 KeyCode::End => d.scroll[d.tab] = usize::MAX / 2,
                 KeyCode::Char('/') if d.tab == 1 => d.editing_filter = true,
+                KeyCode::Char('>') => d.hscroll[d.tab] += 16,
+                KeyCode::Char('<') => d.hscroll[d.tab] = d.hscroll[d.tab].saturating_sub(16),
                 KeyCode::Char('r') => app.inspect_as_root(),
                 _ => {}
             }
@@ -170,21 +170,16 @@ pub fn key(app: &mut App, k: KeyEvent) {
             app.toggle_tag(p);
             app.move_sel(1);
         }
-        // Sideways: Shift or Alt+←/→ (terminals often keep Shift+arrows
-        // for themselves), < and >, and plain ←/→ where nothing folds.
-        KeyCode::Right if shift || alt => app.hscroll_by(8),
-        KeyCode::Left if shift || alt => app.hscroll_by(-8),
-        KeyCode::Char('>') => app.hscroll_by(8),
-        KeyCode::Char('<') => app.hscroll_by(-8),
-        KeyCode::Right if app.arrows_scroll() => app.hscroll_by(8),
-        KeyCode::Left if app.arrows_scroll() => app.hscroll_by(-8),
         KeyCode::Right | KeyCode::Left if ctrl => {
             if let Some(key) = app.cur_row().and_then(|r| r["key"].as_str().map(String::from)) {
                 app.engine.set_subtree_expanded(&key, k.code == KeyCode::Right);
             }
         }
-        KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right => app.set_collapsed(false),
-        KeyCode::Char('-') | KeyCode::Left => app.set_collapsed(true),
+        // ←/→ scroll sideways, as in htop (+ and − fold).
+        KeyCode::Right | KeyCode::Char('>') => app.hscroll_by(app.hstep()),
+        KeyCode::Left | KeyCode::Char('<') => app.hscroll_by(-app.hstep()),
+        KeyCode::Char('+') | KeyCode::Char('=') => app.set_collapsed(false),
+        KeyCode::Char('-') => app.set_collapsed(true),
         KeyCode::Char('*') => app.run(Act::ExpandAll),
         KeyCode::Char('_') => app.run(Act::CollapseAll),
         KeyCode::Char('f') => app.run(Act::ToggleFocusCurrent),
@@ -247,6 +242,18 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
                     app.hscroll = crate::ui::thumb_pos(t.width, len, view, view + app.hmax, start);
                 }
             }
+            Some(Drag::DetailsV(grab)) => {
+                if let (Some((t, _, len)), Some(Popup::Details(d))) = (g.dvbar, &mut app.popup) {
+                    let (rows, total, _, _) = g.dsize;
+                    d.scroll[d.tab] = crate::ui::thumb_pos(t.height, len, rows, total, y as i32 - t.y as i32 - *grab as i32);
+                }
+            }
+            Some(Drag::DetailsH(grab)) => {
+                if let (Some((t, _, len)), Some(Popup::Details(d))) = (g.dhbar, &mut app.popup) {
+                    let (_, _, cols, widest) = g.dsize;
+                    d.hscroll[d.tab] = crate::ui::thumb_pos(t.width, len, cols, widest, x as i32 - t.x as i32 - *grab as i32);
+                }
+            }
             Some(Drag::Resize(key, start, w0)) => {
                 let w = (*w0 as i64 + x as i64 - *start as i64).clamp(2, 80) as usize;
                 let key = *key;
@@ -276,7 +283,7 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
                 app.last_click = Some((now, x, y));
             }
             // A click outside a pop-up closes it.
-            let in_popup = matches!(hit, Some(Hit::Popup) | Some(Hit::Menu(..)) | Some(Hit::DetailsTab(_)) | Some(Hit::DetailsRoot) | Some(Hit::EnvFilter));
+            let in_popup = matches!(hit, Some(Hit::Popup) | Some(Hit::Menu(..)) | Some(Hit::DetailsTab(_)) | Some(Hit::DetailsRoot) | Some(Hit::EnvFilter) | Some(Hit::DetailsV) | Some(Hit::DetailsH));
             if app.popup.is_some() && !in_popup {
                 app.popup = None;
                 return;
@@ -294,8 +301,9 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
             let d: i64 = if m.kind == MouseEventKind::ScrollDown { 1 } else { -1 };
             match &mut app.popup {
                 Some(Popup::Details(dd)) => {
-                    let s = &mut dd.scroll[dd.tab];
-                    *s = (*s as i64 + d * 3).max(0) as usize;
+                    let sideways = shift || ctrl || m.modifiers.contains(KeyModifiers::ALT) || matches!(hit, Some(Hit::DetailsH));
+                    let s = if sideways { &mut dd.hscroll[dd.tab] } else { &mut dd.scroll[dd.tab] };
+                    *s = (*s as i64 + d * if sideways { 10 } else { 3 }).max(0) as usize;
                 }
                 Some(Popup::Help(s)) => *s = (*s as i64 + d).max(0) as usize,
                 Some(Popup::Menus(stack)) => stack.last_mut().unwrap().step(d as i32),
@@ -394,6 +402,32 @@ fn left(app: &mut App, g: &Geometry, hit: Option<Hit>, x: u16, y: u16, double: b
             }
         }
         Some(Hit::DetailsRoot) => app.inspect_as_root(),
+        Some(Hit::DetailsV) => {
+            if let (Some((t, start, len)), Some(Popup::Details(d))) = (g.dvbar, &mut app.popup) {
+                let at = y - t.y;
+                let page = g.dsize.0;
+                if at >= start && at < start + len {
+                    app.drag = Some(Drag::DetailsV(at - start));
+                } else if at < start {
+                    d.scroll[d.tab] = d.scroll[d.tab].saturating_sub(page);
+                } else {
+                    d.scroll[d.tab] += page;
+                }
+            }
+        }
+        Some(Hit::DetailsH) => {
+            if let (Some((t, start, len)), Some(Popup::Details(d))) = (g.dhbar, &mut app.popup) {
+                let at = x - t.x;
+                let page = g.dsize.2;
+                if at >= start && at < start + len {
+                    app.drag = Some(Drag::DetailsH(at - start));
+                } else if at < start {
+                    d.hscroll[d.tab] = d.hscroll[d.tab].saturating_sub(page);
+                } else {
+                    d.hscroll[d.tab] += page;
+                }
+            }
+        }
         Some(Hit::EnvFilter) => {
             if let Some(Popup::Details(d)) = &mut app.popup {
                 d.editing_filter = true;

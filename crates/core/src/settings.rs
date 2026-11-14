@@ -237,6 +237,58 @@ impl Settings {
     }
 }
 
+/// The settings both front ends share, typed as the Qt app's QML Settings
+/// holds them (bools, numbers, strings), for picking up the other app's
+/// changes. Only keys present in the file. (Not selection, scroll or root
+/// mode: those are each app's own.)
+pub fn shared_json(s: &Settings) -> serde_json::Value {
+    const BOOLS: &[&str] = &["sortDesc", "showKernel", "showResources", "showCards", "showMeters", "cpuCombined", "tintColumns", "shortenStorePaths"];
+    const NUMS: &[&str] = &["interval", "columnsVersion"];
+    const STRS: &[&str] = &["view", "sortKey", "filterText", "storeStyle", "hiddenColumns", "columnWidths", "columnOrder", "hiddenGpus", "pinnedGpus", "collapsedSections"];
+    let mut m = serde_json::Map::new();
+    for k in BOOLS {
+        if let Some(v) = s.get(k) {
+            m.insert(k.to_string(), serde_json::json!(v == "true"));
+        }
+    }
+    for k in NUMS {
+        if let Some(v) = s.get(k).and_then(|v| v.parse::<f64>().ok()) {
+            m.insert(k.to_string(), serde_json::json!(v));
+        }
+    }
+    for k in STRS {
+        if let Some(v) = s.get(k) {
+            m.insert(k.to_string(), serde_json::json!(v));
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
+/// When the settings file last changed (ms since the epoch; 0 if missing).
+pub fn stamp() -> f64 {
+    std::fs::metadata(path())
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(0.0)
+}
+
+/// The window's heartbeat (kept out of the settings file, which the Qt app
+/// rewrites whole whenever it saves): {t: ms, visible}.
+fn alive_path() -> PathBuf {
+    path().with_file_name("alive.json")
+}
+
+pub fn mark_alive(visible: bool) {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as f64).unwrap_or(0.0);
+    let _ = std::fs::write(alive_path(), serde_json::json!({"t": t, "visible": visible}).to_string());
+}
+
+pub fn last_alive() -> serde_json::Value {
+    std::fs::read_to_string(alive_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::json!({"t": 0, "visible": true}))
+}
+
 /// A batch of changes applied onto the current file contents, so writing
 /// one key never overwrites the other app's newer value of another.
 pub fn update(f: impl FnOnce(&mut Settings)) -> std::io::Result<Settings> {

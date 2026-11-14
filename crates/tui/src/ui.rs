@@ -33,6 +33,8 @@ pub enum Hit {
     Table,
     VBar,
     HBar,
+    DetailsV,
+    DetailsH,
     Menu(usize, usize),
     DetailsTab(usize),
     DetailsRoot,
@@ -55,6 +57,10 @@ pub struct Geometry {
     /// Scrollbars: (track, thumb start, thumb length) along the track.
     pub vbar: Option<(Rect, u16, u16)>,
     pub hbar: Option<(Rect, u16, u16)>,
+    /// The details dialog's: bars, and (rows shown, lines, columns shown, widest).
+    pub dvbar: Option<(Rect, u16, u16)>,
+    pub dhbar: Option<(Rect, u16, u16)>,
+    pub dsize: (usize, usize, usize, usize),
 }
 
 impl Geometry {
@@ -84,7 +90,7 @@ pub fn draw(f: &mut Frame, app: &mut App) -> Geometry {
     let area = f.area();
     let buf = f.buffer_mut();
     fill(buf, area, theme::bg());
-    let mut g = Geometry { hits: Vec::new(), cols: Vec::new(), table: Rect::default(), header_y: 0, cmd_x: 0, vbar: None, hbar: None };
+    let mut g = Geometry { hits: Vec::new(), cols: Vec::new(), table: Rect::default(), header_y: 0, cmd_x: 0, vbar: None, hbar: None, dvbar: None, dhbar: None, dsize: (0, 0, 0, 0) };
     if area.height < 6 || area.width < 30 {
         put(buf, 0, 0, "treetop: the terminal is too small", st(theme::text()), area.width);
         return g;
@@ -857,6 +863,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
     let need_h = widest > view_w as usize && full.height > 2;
     let body = Rect::new(full.x, full.y, view_w, full.height - need_h as u16);
     app.hmax = widest.saturating_sub(view_w as usize);
+    app.view_w = view_w as usize;
     app.hscroll = app.hscroll.min(app.hmax);
     g.table = body;
     app.page = body.height as usize;
@@ -1271,7 +1278,6 @@ fn details(buf: &mut Buffer, d: &mut crate::app::Details, g: &mut Geometry, area
                     }
                     lines.extend(command::env_lines(k, v));
                 }
-                lines.insert(0, Vec::new());
             }
             None => needs_root(&mut lines),
         },
@@ -1292,35 +1298,66 @@ fn details(buf: &mut Buffer, d: &mut crate::app::Details, g: &mut Geometry, area
             None => needs_root(&mut lines),
         },
     }
+    // The list (below the filter on the Environment tab), with scrollbars.
+    let top = if d.tab == 1 && env.is_some() { 1 } else { 0 };
+    let widest = lines.iter().map(|l| l.iter().map(|(_, t)| t.chars().count()).sum::<usize>()).max().unwrap_or(0);
+    let lw = body.width.saturating_sub(1);
+    let need_h = widest > lw as usize;
+    let list = Rect::new(body.x, body.y + top, lw, body.height.saturating_sub(top + need_h as u16));
+    let rows = list.height as usize;
     let scroll = &mut d.scroll[d.tab];
-    *scroll = (*scroll).min(lines.len().saturating_sub(body.height as usize));
+    *scroll = (*scroll).min(lines.len().saturating_sub(rows));
+    let hs = &mut d.hscroll[d.tab];
+    *hs = (*hs).min(widest.saturating_sub(lw as usize));
+    let (scroll, hs) = (*scroll, *hs);
+    g.dsize = (rows, lines.len(), lw as usize, widest);
     let panel = Rgb::hex("#2a2e32");
-    for (i, l) in lines.iter().skip(*scroll).enumerate() {
-        if i as u16 >= body.height {
+    for (i, l) in lines.iter().skip(scroll).enumerate() {
+        if i >= rows {
             break;
         }
-        let mut xx = body.x;
+        let y = list.y + i as u16;
+        // Cells of the line, then the visible window of them.
+        let mut cells: Vec<(char, Style)> = Vec::new();
         for (k, t) in l {
             let mut sty = kind_style(*k, panel).bg(bg);
             if *k == Kind::Plain {
                 sty = sty.fg(theme::text());
             }
-            xx += put(buf, xx, body.y + i as u16, t, sty, (body.x + body.width).saturating_sub(xx));
+            cells.extend(t.chars().map(|c| (c, sty)));
+        }
+        let shown: Vec<(char, Style)> = cells.into_iter().skip(hs).take(lw as usize).collect();
+        let mut xx = list.x;
+        for (c, sty) in shown {
+            xx += put(buf, xx, y, &c.to_string(), sty, 1);
         }
         // The "Read as root…" button.
-        if l.first().is_some_and(|(_, t)| t == "[ Read as root… ]" || t == "[ Waiting for authorization… ]") {
-            g.hits.push((Rect::new(body.x, body.y + i as u16, 24, 1), Hit::DetailsRoot));
+        if l.first().is_some_and(|(_, t)| t == "[ Read as root… ]") {
+            if d.waiting_root {
+                put(buf, list.x, y, "[ Waiting for authorization… ]", st(theme::dim()).bg(bg), 30);
+            }
+            g.hits.push((Rect::new(list.x, y, 30, 1), Hit::DetailsRoot));
         }
     }
-    if (d.tab == 1 && env.is_none()) || (d.tab == 2 && files.is_none()) {
-        if d.waiting_root {
-            // Swap the button label while waiting.
-            for (i, l) in lines.iter().enumerate() {
-                if l.first().is_some_and(|(_, t)| t == "[ Read as root… ]") {
-                    put(buf, body.x, body.y + i as u16, "[ Waiting for authorization… ]", st(theme::dim()).bg(bg), 30);
-                }
-            }
+    let track_c = theme::text_a(0.10);
+    let thumb_c = theme::text_a(0.40);
+    let vt = Rect::new(list.x + lw, list.y, 1, list.height);
+    let (vs, vl) = thumb(vt.height, rows, lines.len(), scroll);
+    for yy in 0..vt.height {
+        let on = yy >= vs && yy < vs + vl;
+        buf[(vt.x, vt.y + yy)].set_char(if on { '┃' } else { '│' }).set_fg(if on { thumb_c } else { track_c });
+    }
+    g.dvbar = Some((vt, vs, vl));
+    g.hits.push((vt, Hit::DetailsV));
+    if need_h {
+        let ht = Rect::new(list.x, list.y + list.height, lw, 1);
+        let (hs0, hl) = thumb(ht.width, lw as usize, widest, hs);
+        for xx in 0..ht.width {
+            let on = xx >= hs0 && xx < hs0 + hl;
+            buf[(ht.x + xx, ht.y)].set_char(if on { '━' } else { '─' }).set_fg(if on { thumb_c } else { track_c });
         }
+        g.dhbar = Some((ht, hs0, hl));
+        g.hits.push((ht, Hit::DetailsH));
     }
 }
 

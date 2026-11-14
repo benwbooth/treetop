@@ -10,12 +10,18 @@ pub enum Frontend {
 
 /// (keys, what they do), as the help shows them.
 pub fn help(fe: Frontend) -> Vec<(&'static str, &'static str)> {
+    let fold = if fe == Frontend::Window { ("+ / − / ← →", "expand / collapse subtree") } else { ("+ / −", "expand / collapse subtree") };
+    let sideways = if fe == Frontend::Window {
+        ("Shift+← →", "scroll sideways (Shift+wheel too)")
+    } else {
+        ("← → / < >", "scroll sideways (Alt or Ctrl+wheel too, or the scrollbar)")
+    };
     let mut v = vec![
         ("↑ ↓ PgUp PgDn Home End", "move"),
         ("Space", "tag process (Ctrl+click too)"),
         ("U", "untag all"),
-        ("+ / − / ← →", "expand / collapse subtree"),
-        ("Shift+← →", "scroll sideways (Shift+wheel too)"),
+        fold,
+        sideways,
         ("* / _", "expand all / collapse all"),
         ("Ctrl+→ / Ctrl+←", "expand / collapse everything below"),
         ("Click ▸/▾", "fold (or the tree lines); Shift+click: whole subtree"),
@@ -39,7 +45,6 @@ pub fn help(fe: Frontend) -> Vec<(&'static str, &'static str)> {
             v.push(("Ctrl+= / Ctrl+- / Ctrl+0", "font size"));
         }
         Frontend::Terminal => {
-            v.push(("Alt+← → / < >", "scroll sideways (Alt or Ctrl+wheel too; plain ← → in List and GPU views)"));
             v.push(("Scrollbars", "drag the thumb, click the track to page"));
             v.push(("Esc", "clear the filter, leave focus"));
             v.push(("F10 / q / Ctrl+Q", "quit"));

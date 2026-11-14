@@ -117,8 +117,6 @@ ApplicationWindow {
         property string pinnedGpus: ""
         // Restart detection: a --hidden start soon after an instance was
         // alive (devloop rebuild) restores the window instead of hiding it.
-        property real lastAlive: 0
-        property bool lastVisible: true
         property bool ownTrayIcon: false
         property string collapsedSections: ""
         // The view as you left it.
@@ -137,15 +135,42 @@ ApplicationWindow {
         id: mon
         onUpdated: (json) => win.apply(JSON.parse(json))
     }
+    // The terminal version (treetop-tui) shares these settings: take its
+    // changes, so ours never write back stale values over them.
+    property real settingsStamp: 0
+    Timer { interval: 1500; running: true; repeat: true; onTriggered: win.reloadSettings() }
+    function reloadSettings() {
+        const t = mon.settings_stamp()
+        if (t === settingsStamp) return
+        settingsStamp = t
+        const v = JSON.parse(mon.shared_settings())
+        for (const k in v) {
+            if (settings[k] === undefined || settings[k] === v[k]) continue
+            settings[k] = v[k]
+            switch (k) {
+            case "view": setView(v[k]); break
+            case "sortKey": case "sortDesc":
+                table.sortKey = settings.sortKey; table.sortDesc = settings.sortDesc
+                mon.set_sort(settings.sortKey, settings.sortDesc); break
+            case "filterText": if (filterField.text !== v[k]) filterField.text = v[k]; break
+            case "showKernel": mon.set_show_kernel(v[k]); mon.refresh(); break
+            case "hiddenColumns": table.hiddenColumns = v[k].split(",").filter(x => x.length > 0); break
+            case "columnWidths": try { table.widthOverride = JSON.parse(v[k]) } catch (e) {} break
+            case "columnOrder": try { table.columnOrder = JSON.parse(v[k]) } catch (e) {} break
+            case "storeStyle": table.storeStyle = v[k]; break
+            case "shortenStorePaths": table.shortenStorePaths = v[k]; break
+            }
+        }
+    }
     property bool booted: false
     property bool autostart: false
     onVisibleChanged: {
         mon.set_rows_enabled(visible)
-        if (booted) { settings.lastVisible = visible; settings.sync() }
+        if (booted) mon.mark_alive(visible)
     }
     Timer {
         interval: 5000; running: true; repeat: true
-        onTriggered: { settings.lastAlive = Date.now(); settings.sync() }
+        onTriggered: mon.mark_alive(win.visible)
     }
     function setAutostart(on) {
         showStatus(mon.set_autostart(on))
@@ -210,7 +235,8 @@ ApplicationWindow {
     Component.onCompleted: {
         // Restarted by a rebuild (an instance was alive moments ago): come
         // back the way it was. A real login start stays in the tray.
-        if (startHidden && settings.lastVisible && Date.now() - settings.lastAlive < 30000) win.wantVisible = true
+        const alive = JSON.parse(mon.last_alive())
+        if (startHidden && alive.visible && Date.now() - alive.t < 30000) win.wantVisible = true
         booted = true
         // One-time: TIME+ is now hidden by default; apply that to saved settings too.
         if (settings.columnsVersion < 1) {
@@ -219,7 +245,8 @@ ApplicationWindow {
             settings.hiddenColumns = h.join(",")
             settings.columnsVersion = 1
         }
-        settings.lastAlive = Date.now()
+        mon.mark_alive(win.wantVisible)
+        settingsStamp = mon.settings_stamp()
         autostart = mon.autostart_enabled()
         mon.set_interval(settings.interval)
         mon.set_rows_enabled(win.visible)

@@ -110,6 +110,8 @@ pub struct Details {
     pub info: Value,
     pub tab: usize,
     pub scroll: [usize; 3],
+    /// Sideways, per tab.
+    pub hscroll: [usize; 3],
     pub env_filter: String,
     pub editing_filter: bool,
     pub waiting_root: bool,
@@ -199,6 +201,9 @@ pub enum Drag {
     /// Dragging a scrollbar's thumb: where on the thumb it was grabbed.
     VBar(u16),
     HBar(u16),
+    /// The details dialog's scrollbars.
+    DetailsV(u16),
+    DetailsH(u16),
 }
 
 pub struct App {
@@ -216,8 +221,9 @@ pub struct App {
     /// First row shown, and how far rows are scrolled sideways.
     pub top: usize,
     pub hscroll: usize,
-    /// How far rows can scroll sideways (from the last draw).
+    /// How far rows can scroll sideways, and how wide they show (last draw).
     pub hmax: usize,
+    pub view_w: usize,
     /// Rows the table shows, and the screen row of its first (last draw).
     pub page: usize,
     pub table_y: u16,
@@ -277,6 +283,7 @@ impl App {
             top: 0,
             hscroll: 0,
             hmax: 0,
+            view_w: 80,
             page: 20,
             table_y: 0,
             tagged: HashSet::new(),
@@ -594,14 +601,13 @@ impl App {
         self.top = self.top.min(max);
     }
 
-    pub fn hscroll_by(&mut self, d: i64) {
-        self.hscroll = (self.hscroll as i64 + d).clamp(0, self.hmax as i64) as usize;
+    /// One ←/→ press: a third of the visible width.
+    pub fn hstep(&self) -> i64 {
+        (self.view_w as i64 / 3).max(16)
     }
 
-    /// True where ←/→ don't fold anything (List and GPU views): there they
-    /// scroll sideways, as in htop.
-    pub fn arrows_scroll(&self) -> bool {
-        matches!(self.view(), "flat" | "gpu")
+    pub fn hscroll_by(&mut self, d: i64) {
+        self.hscroll = (self.hscroll as i64 + d).clamp(0, self.hmax as i64) as usize;
     }
 
     // ---- actions ----
@@ -762,6 +768,7 @@ impl App {
             info,
             tab: 0,
             scroll: [0; 3],
+            hscroll: [0; 3],
             env_filter: String::new(),
             editing_filter: false,
             waiting_root: false,

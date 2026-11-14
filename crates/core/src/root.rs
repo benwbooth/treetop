@@ -162,10 +162,14 @@ struct HelperState {
     cooling: crate::cooling::Shared,
     net: crate::net::NetAccounting,
     last: std::time::Instant,
+    /// The last sample, shared by every client asking within a moment of
+    /// each other (the network counters can only be taken once).
+    cached: Option<(std::time::Instant, Value)>,
 }
 
-/// Answers one client's requests until it disconnects.
-fn serve(input: impl BufRead, mut out: impl Write, st: &mut HelperState) {
+/// Answers one client's requests until it disconnects. Several clients
+/// (the window and terminals) share one helper and one authorization.
+fn serve(input: impl BufRead, mut out: impl Write, st: &std::sync::Mutex<HelperState>) {
     let _ = writeln!(out, "ready");
     let _ = out.flush();
     for line in input.lines() {
@@ -173,9 +177,18 @@ fn serve(input: impl BufRead, mut out: impl Write, st: &mut HelperState) {
         let parts: Vec<&str> = line.split_whitespace().collect();
         let reply = match parts.first().copied() {
             Some("sample") => {
-                let mut v = sample(&st.gpu, &mut st.net, &mut st.last);
-                v["cooling"] = json!(*st.cooling.lock().unwrap());
-                v
+                let mut st = st.lock().unwrap();
+                let fresh = st.cached.as_ref().filter(|(at, _)| at.elapsed() < std::time::Duration::from_millis(700)).map(|(_, v)| v.clone());
+                match fresh {
+                    Some(v) => v,
+                    None => {
+                        let s = &mut *st;
+                        let mut v = sample(&s.gpu, &mut s.net, &mut s.last);
+                        v["cooling"] = json!(*s.cooling.lock().unwrap());
+                        s.cached = Some((std::time::Instant::now(), v.clone()));
+                        v
+                    }
+                }
             }
             Some("inspect") => {
                 let pid = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
@@ -208,47 +221,73 @@ fn peer_uid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
     (r == 0).then_some(cred.uid)
 }
 
-/// `treetop --root-helper`, run as root through pkexec. Serves treetop over
-/// stdin/stdout; when treetop exits it waits LINGER on a socket only the
-/// authorizing user can use, so a restart reconnects without a prompt.
+/// `treetop --root-helper`, run as root through pkexec or sudo. Serves the
+/// app that started it over stdin/stdout, and at once also listens on a
+/// socket only the authorizing user can use: other treetop windows and
+/// terminals join without another prompt. Once nobody has been connected
+/// for LINGER it exits (a restart or rebuild within that reconnects).
 pub fn helper_main() {
-    let mut st = HelperState {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let st = Arc::new(Mutex::new(HelperState {
         gpu: gpu::spawn_poller(),
         cooling: crate::cooling::spawn_poller(),
         net: crate::net::NetAccounting::start(),
         last: std::time::Instant::now(),
-    };
-    serve(std::io::stdin().lock(), std::io::stdout().lock(), &mut st);
+        cached: None,
+    }));
+    let active = Arc::new(AtomicUsize::new(1));
+    let idle_since = Arc::new(Mutex::new(std::time::Instant::now()));
 
     // Who asked for root: polkit says PKEXEC_UID, sudo says SUDO_UID.
-    let Some(uid) = ["PKEXEC_UID", "SUDO_UID"].iter().find_map(|k| std::env::var(k).ok().and_then(|u| u.parse::<u32>().ok())) else { return };
-    let path = socket_path(uid);
-    let _ = std::fs::remove_file(&path);
-    let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) else { return };
-    if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) {
-        unsafe {
-            libc::chmod(c.as_ptr(), 0o600);
-            libc::chown(c.as_ptr(), uid, u32::MAX);
-        }
-    }
-    let _ = listener.set_nonblocking(true);
-    let mut deadline = std::time::Instant::now() + LINGER;
-    while std::time::Instant::now() < deadline {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                if peer_uid(&stream) != Some(uid) {
-                    continue; // only the user who authorized us
+    let uid = ["PKEXEC_UID", "SUDO_UID"].iter().find_map(|k| std::env::var(k).ok().and_then(|u| u.parse::<u32>().ok()));
+    let path = uid.map(socket_path);
+    if let (Some(uid), Some(path)) = (uid, path.clone()) {
+        let _ = std::fs::remove_file(&path);
+        if let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) {
+            if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) {
+                unsafe {
+                    libc::chmod(c.as_ptr(), 0o600);
+                    libc::chown(c.as_ptr(), uid, u32::MAX);
                 }
-                let _ = stream.set_nonblocking(false);
-                if let Ok(reader) = stream.try_clone() {
-                    serve(BufReader::new(reader), stream, &mut st);
-                }
-                deadline = std::time::Instant::now() + LINGER;
             }
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            let (st, active, idle_since) = (st.clone(), active.clone(), idle_since.clone());
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    if peer_uid(&stream) != Some(uid) {
+                        continue; // only the user who authorized us
+                    }
+                    let (st, active, idle_since) = (st.clone(), active.clone(), idle_since.clone());
+                    active.fetch_add(1, Ordering::SeqCst);
+                    std::thread::spawn(move || {
+                        if let Ok(reader) = stream.try_clone() {
+                            serve(BufReader::new(reader), stream, &st);
+                        }
+                        if active.fetch_sub(1, Ordering::SeqCst) == 1 {
+                            *idle_since.lock().unwrap() = std::time::Instant::now();
+                        }
+                    });
+                }
+            });
         }
     }
-    let _ = std::fs::remove_file(&path);
+    serve(std::io::stdin().lock(), std::io::stdout().lock(), &st);
+    if active.fetch_sub(1, Ordering::SeqCst) == 1 {
+        *idle_since.lock().unwrap() = std::time::Instant::now();
+    }
+    if path.is_none() {
+        return;
+    }
+    // Linger while anyone is connected, and LINGER after the last leaves.
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if active.load(Ordering::SeqCst) == 0 && idle_since.lock().unwrap().elapsed() >= LINGER {
+            break;
+        }
+    }
+    if let Some(p) = path {
+        let _ = std::fs::remove_file(&p);
+    }
 }
 
 /// `treetop --inspect <pid>` (one-shot, run through pkexec).
