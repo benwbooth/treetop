@@ -340,12 +340,11 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+0"; onActivated: settings.fontDelta = 0 }
 
     // ---- layout ----------------------------------------------------------
-    // Tooltips only once the pointer has really moved (see TipGate).
-    TipGate { id: tips }
-
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
+        // Tooltips only once the pointer has really moved (see TipGate).
+        TipGate { id: tips }
 
         // Toolbar
         ToolBar {
