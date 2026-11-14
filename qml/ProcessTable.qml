@@ -28,7 +28,11 @@ FocusScope {
     property int focusPid: 0
     // Tooltips stay out of the way of menus: hidden while a menu is open, and
     // for a moment after any click (so one can't pop up over a context menu).
-    readonly property bool tipsBlocked: menu.opened || columnMenu.opened || tipHold.running
+    readonly property bool tipsBlocked: menu.opened || columnMenu.opened || tipHold.running || !tipGate.armed
+    TipGate { id: tipGate }
+    // The one row whose command tooltip may show; hovering anything else in
+    // the table takes it away (a tooltip's own hover state can go stale).
+    property string cmdTipKey: ""
     Timer { id: tipHold; interval: 1200 }
     function holdTips() { tipHold.restart() }
     // Restored once rows first arrive: the selection and scroll position
@@ -421,7 +425,7 @@ FocusScope {
                 }
                 HoverHandler { id: colHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: { const p = parent.mapToItem(table, 0, parent.height); columnMenu.popup(p.x, p.y) } }
-                ToolTip.visible: colHover.hovered
+                ToolTip.visible: colHover.hovered && !table.tipsBlocked
                 ToolTip.delay: 500
                 ToolTip.text: "Choose which columns to show (you can also right-click any column header)."
             }
@@ -465,7 +469,7 @@ FocusScope {
                         visible: parent.containsMouse || parent.pressed
                         color: "#0d1a12"
                     }
-                    ToolTip.visible: containsMouse && !pressed
+                    ToolTip.visible: containsMouse && !pressed && !table.tipsBlocked
                     ToolTip.delay: 800
                     ToolTip.text: "Drag to resize · double-click to fit all columns"
                 }
@@ -492,7 +496,7 @@ FocusScope {
                             color: "#0d1a12"
                             elide: Text.ElideRight
                         }
-                        HoverHandler { id: hh }
+                        HoverHandler { id: hh; onHoveredChanged: if (hovered) table.cmdTipKey = "" }
                         ToolTip.visible: hh.hovered && !table.tipsBlocked
                         ToolTip.delay: 600
                         ToolTip.timeout: 20000
@@ -721,7 +725,7 @@ FocusScope {
                     textFormat: Text.StyledText
                     text: rowItem.fixedHtml()
                     // A cell cut off with … shows its full text on hover.
-                    HoverHandler { id: cellHover }
+                    HoverHandler { id: cellHover; onHoveredChanged: if (hovered) table.cmdTipKey = "" }
                     readonly property var hoverCol: cellHover.hovered ? table.colAt(cellHover.point.position.x + 4) : null
                     readonly property string hoverFull: hoverCol ? String(rowItem.cell(hoverCol.key)) : ""
                     Loader {
@@ -796,6 +800,7 @@ FocusScope {
                             id: expHover
                             enabled: parent.canToggle
                             cursorShape: Qt.PointingHandCursor
+                            onHoveredChanged: if (hovered) table.cmdTipKey = ""
                         }
                         TapHandler {
                             enabled: parent.canToggle
@@ -845,7 +850,7 @@ FocusScope {
                         font.bold: true
                         color: rowItem.current ? table.highlightTextColor : "#56b6e0"
                         anchors.verticalCenter: parent.verticalCenter
-                        HoverHandler { id: aggHover }
+                        HoverHandler { id: aggHover; onHoveredChanged: if (hovered) table.cmdTipKey = "" }
                         ToolTip.visible: aggHover.hovered && !table.tipsBlocked
                         ToolTip.delay: 500
                         ToolTip.text: "Collapsed: CPU, memory, GPU, disk and network on this row are totals for these " + rowItem.aggCount + " processes (this one and everything below it)."
@@ -865,13 +870,14 @@ FocusScope {
                         // so a tall tooltip can't flicker on and off.
                         HoverHandler {
                             id: cmdHover
-                            onHoveredChanged: if (!hovered) tipGrace.restart()
+                            onHoveredChanged: if (hovered) table.cmdTipKey = rowItem.key; else tipGrace.restart()
                         }
                         Timer { id: tipGrace; interval: 350 }
                         Loader {
                             id: tipLoader
                             readonly property bool overTip: item ? item.hovered : false
-                            active: (cmdHover.hovered || overTip || tipGrace.running) && !rowItem.group && rowItem.command.length > 0 && !table.tipsBlocked
+                            active: (cmdHover.hovered || overTip || tipGrace.running) && table.cmdTipKey === rowItem.key
+                                && !rowItem.group && rowItem.command.length > 0 && !table.tipsBlocked
                             onOverTipChanged: if (!overTip) tipGrace.restart()
                             sourceComponent: ToolTip {
                                 readonly property bool hovered: tipHover.hovered
@@ -994,6 +1000,7 @@ FocusScope {
 
     Menu {
         id: columnMenu
+        onClosed: tipGate.disarm()
         MenuItem { text: "Columns"; enabled: false }
         Repeater {
             model: table.columns.filter(c => c.key !== "command")
@@ -1016,6 +1023,7 @@ FocusScope {
 
     Menu {
         id: menu
+        onClosed: tipGate.disarm()
         readonly property var sigs: JSON.parse(table.monitor.signal_list())
         MenuItem {
             enabled: false

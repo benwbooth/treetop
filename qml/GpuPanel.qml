@@ -7,6 +7,7 @@ import "Fmt.js" as Fmt
 // temperatures, fan, power and the PCIe link, with a history graph.
 Rectangle {
     id: panel
+    TipGate { id: tipGate }
     property var gpu: ({})
     property int number: 1
     property var history: []
@@ -43,6 +44,7 @@ Rectangle {
         onClicked: (m) => ctx.popup()
     }
     Menu {
+        onClosed: tipGate.disarm()
         id: ctx
         MenuItem { text: "Hide GPU " + panel.number; onTriggered: panel.hideRequested() }
     }
@@ -97,7 +99,7 @@ Rectangle {
                         segments: [{ value: val, color: Qt.lighter(panel.accent, 1 + index * 0.12) }]
                         text: val.toFixed(0) + "%"
                         ToolTip.text: panel.engineTips[index] + " Summed from the processes using this GPU (your own processes unless treetop runs as root)."
-                        ToolTip.visible: eh.hovered
+                        ToolTip.visible: eh.hovered && tipGate.armed
                         ToolTip.delay: 600
                         HoverHandler { id: eh }
                     }
@@ -128,7 +130,7 @@ Rectangle {
                     segments: [{ value: panel.gpu.gttUsed || 0, color: Qt.darker(panel.memColor, 1.3) }]
                     text: Fmt.bytes(panel.gpu.gttUsed) + "/" + Fmt.bytes(panel.gpu.gttTotal)
                     ToolTip.text: "GTT: system RAM the GPU has mapped (used for buffers that don't fit or don't need to be in VRAM)."
-                    ToolTip.visible: gh.hovered
+                    ToolTip.visible: gh.hovered && tipGate.armed
                     ToolTip.delay: 600
                     HoverHandler { id: gh }
                 }

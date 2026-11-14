@@ -340,6 +340,9 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+0"; onActivated: settings.fontDelta = 0 }
 
     // ---- layout ----------------------------------------------------------
+    // Tooltips only once the pointer has really moved (see TipGate).
+    TipGate { id: tips }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -356,10 +359,11 @@ ApplicationWindow {
                 ToolButton {
                     icon.name: "application-menu"
                     ToolTip.text: "Options"
-                    ToolTip.visible: hovered
+                    ToolTip.visible: hovered && tips.armed
                     onClicked: optionsMenu.popup(this, 0, height)
                     Menu {
                         id: optionsMenu
+                        onClosed: tips.disarm()
                         KeyMenuItem { text: "Start at login (in the tray)"; icon.name: "system-run-symbolic"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
                         KeyMenuItem {
                             text: "Separate tray icon (besides the tray widget)"
@@ -432,10 +436,11 @@ ApplicationWindow {
                     text: cur.t + "  ▾"
                     onClicked: viewMenu.popup(this, 0, height)
                     ToolTip.text: "View: the process tree, a flat list, grouped by container, or the GPU view"
-                    ToolTip.visible: hovered && !viewMenu.visible
+                    ToolTip.visible: hovered && !viewMenu.visible && tips.armed
                     ToolTip.delay: 600
                     Menu {
                         id: viewMenu
+                        onClosed: tips.disarm()
                         Repeater {
                             model: viewButton.views
                             KeyMenuItem {
@@ -461,7 +466,7 @@ ApplicationWindow {
                     text: anyCollapsed ? "Expand all" : "Collapse all"
                     onClicked: mon.set_expanded_all(anyCollapsed)
                     ToolTip.text: anyCollapsed ? "Expand every branch of the tree (*)" : "Collapse the tree to its top-level processes (_)"
-                    ToolTip.visible: hovered
+                    ToolTip.visible: hovered && tips.armed
                 }
                 ToolSeparator {}
                 TextField {
@@ -487,7 +492,7 @@ ApplicationWindow {
                     ToolTip.text: win.snap.root
                         ? "Root access is on: every process's disk I/O, GPU use, executable path, environment and open files are visible, and signals to root's processes need no further prompts. Click to turn off."
                         : "Root access is off: other users' (e.g. root's) disk I/O, GPU use, paths, environment and files are hidden by the kernel. Click to turn it on (asks polkit once)."
-                    ToolTip.visible: hovered
+                    ToolTip.visible: hovered && tips.armed
                     ToolTip.delay: 400
                 }
             }
@@ -519,6 +524,7 @@ ApplicationWindow {
             }
             Menu {
                 id: resMenu
+                onClosed: tips.disarm()
                 MenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
                 MenuItem { text: "Meters"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
                 MenuItem { text: "Combine CPU cores (1)"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
@@ -540,6 +546,7 @@ ApplicationWindow {
         // Which GPUs to show (from the GPU section's "+N hidden" link).
         Menu {
             id: gpuChooser
+            onClosed: tips.disarm()
             MenuItem { text: "GPUs to show"; enabled: false }
             Repeater {
                 model: win.snap.gpus.length
@@ -557,6 +564,7 @@ ApplicationWindow {
         // so updates can't destroy it while it's open.
         Menu {
             id: gpuMenu
+            onClosed: tips.disarm()
             property string pdev: ""
             property int number: 0
             function openFor(g) { pdev = g.pdev; number = g.number; popup() }
@@ -607,7 +615,7 @@ ApplicationWindow {
                     series: [{ values: (vram ? win.hist.vram : win.hist.gpu)[g.index] || [], color: vram ? win.cPink : win.cMagenta }]
                     maximum: 100
                     ToolTip.text: (g.name || "") + "\nClick for the GPU view · right-click to hide"
-                    ToolTip.visible: gpuHover.hovered
+                    ToolTip.visible: gpuHover.hovered && tips.armed
                     ToolTip.delay: 600
                     HoverHandler { id: gpuHover }
                     onClicked: win.setView(win.view === "gpu" ? "tree" : "gpu")
@@ -824,7 +832,7 @@ ApplicationWindow {
                         TapHandler { acceptedButtons: Qt.RightButton; onTapped: gpuMenu.openFor(parent.g) }
                         HoverHandler { id: gh }
                         ToolTip.text: (g.name || "") + "\n▾ hides it · the GPU card or g opens the GPU view"
-                        ToolTip.visible: gh.hovered
+                        ToolTip.visible: gh.hovered && tips.armed
                         ToolTip.delay: 800
                         Text {
                             // One click hides this GPU (it leaves "▸ GPUn hidden · + show").
@@ -883,7 +891,7 @@ ApplicationWindow {
                         segments: [{ value: f.used, color: f.used / f.total > 0.9 ? win.cRed : win.cCyan }]
                         text: Fmt.bytes(f.used) + "/" + Fmt.bytes(f.total)
                         ToolTip.text: f.mount + "  ·  " + (f.device || "") + " (" + (f.type || "") + ")"
-                        ToolTip.visible: fsHover.hovered
+                        ToolTip.visible: fsHover.hovered && tips.armed
                         ToolTip.delay: 500
                         HoverHandler { id: fsHover }
                     }
@@ -998,7 +1006,7 @@ ApplicationWindow {
                     HoverHandler { id: allHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler { onTapped: mon.set_focus(0) }
                     ToolTip.text: "Show all processes again (Esc)"
-                    ToolTip.visible: allHover.hovered
+                    ToolTip.visible: allHover.hovered && tips.armed
                     ToolTip.delay: 500
                 }
                 Text { text: "▸"; font: win.mono; color: win.dimColor }
@@ -1017,7 +1025,7 @@ ApplicationWindow {
                             HoverHandler { id: crumbHover; cursorShape: Qt.PointingHandCursor }
                             TapHandler { onTapped: mon.set_focus(parent.parent.a.pid) }
                             ToolTip.text: "Focus on PID " + parent.a.pid + " instead"
-                            ToolTip.visible: crumbHover.hovered
+                            ToolTip.visible: crumbHover.hovered && tips.armed
                             ToolTip.delay: 500
                         }
                         Text { text: "▸"; font: win.mono; color: win.dimColor }
@@ -1135,6 +1143,7 @@ ApplicationWindow {
     // ---- details dialog --------------------------------------------------
     Dialog {
         id: details
+        onClosed: tips.disarm()
         property var info: ({})
         property string envFilter: ""
         property bool asking: false
@@ -1335,6 +1344,7 @@ ApplicationWindow {
 
     Dialog {
         id: helpDialog
+        onClosed: tips.disarm()
         title: "treetop keys"
         anchors.centerIn: parent
         standardButtons: Dialog.Close

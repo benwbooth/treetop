@@ -5,6 +5,7 @@ import QtQuick.Layouts
 // A clickable "▾ Title  summary" line that folds a meter section away.
 Item {
     id: h
+    TipGate { id: tipGate }
     property string title
     property string summary
     property bool open: true
@@ -49,7 +50,7 @@ Item {
             color: actHover.hovered ? win.cMagenta : win.dimColor
             HoverHandler { id: actHover; cursorShape: Qt.PointingHandCursor }
             TapHandler { onTapped: h.action() }
-            ToolTip.visible: actHover.hovered && h.actionTip.length > 0
+            ToolTip.visible: actHover.hovered && h.actionTip.length > 0 && tipGate.armed
             ToolTip.text: h.actionTip
             ToolTip.delay: 400
         }
