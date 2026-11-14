@@ -1012,6 +1012,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
                 }
             }
         }
+        let strike = if exited { Modifier::CROSSED_OUT } else { Modifier::empty() };
         for sx in 0..r.width {
             let li = sx as usize + app.hscroll;
             let bg = theme::c(bgs.get(li).copied().unwrap_or(row_bg));
@@ -1021,7 +1022,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
                 if *ch != '\0' {
                     cell.set_char(*ch);
                     cell.set_fg(s.fg.unwrap_or(fg));
-                    cell.modifier = s.add_modifier;
+                    cell.modifier = s.add_modifier | strike;
                     if let Some(b) = s.bg {
                         cell.set_bg(b);
                     }

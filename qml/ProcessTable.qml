@@ -671,6 +671,8 @@ FocusScope {
                 readonly property bool isTagged: !!table.tagged[pid]
                 // Exited: kept in place (dimmed) while the list holds still.
                 required property bool exited
+                // Exited processes are struck out.
+                readonly property font rowFont: Qt.font({ family: table.font.family, pointSize: table.font.pointSize, strikeout: exited })
                 readonly property color fg: current ? table.highlightTextColor : (kernel || exited ? table.dimColor : table.textColor)
                 readonly property color chip: container.length > 0 && container !== "Host" ? Qt.hsla(Fmt.hue(container), 0.6, 0.55, 1) : "transparent"
                 readonly property bool showBadge: chip.a > 0
@@ -761,7 +763,7 @@ FocusScope {
                             font: table.font
                         }
                     }
-                    font: table.font
+                    font: rowItem.rowFont
                     color: rowItem.fg
                     clip: true
                 }
@@ -879,7 +881,7 @@ FocusScope {
                     Text {
                         text: rowItem.group || rowItem.exited ? Fmt.escape(rowItem.cmdText) : rowItem.commandHtml()
                         textFormat: Text.StyledText
-                        font: table.font
+                        font: rowItem.rowFont
                         color: rowItem.group ? (rowItem.current ? table.highlightTextColor : table.dimColor) : rowItem.fg
                         anchors.verticalCenter: parent.verticalCenter
                         // Hover: the whole command (full paths), one argument per

@@ -58,13 +58,26 @@ impl Default for Engine {
 /// `hold`: you're using the list (pointer over it, or just scrolled or
 /// typed), so keep its rows where they are: the same rows in the same order,
 /// with their numbers updated. A process that exited stays (dimmed) where it
-/// was; new ones wait. Everything catches up when the hold ends.
+/// was; new ones join at the bottom. Everything catches up when the hold ends.
 fn row_diff(st: &mut State, hold: bool) -> Value {
     let mut rows = st.procs.rows();
     for r in rows.iter_mut() {
         crate::columns::decorate(r, st.store_style);
     }
     if hold && !st.shown.is_empty() {
+        // New processes join at the bottom (out of the tree, so no lines),
+        // where they push nothing around; they find their place later.
+        let held: std::collections::HashSet<&str> = st.shown.iter().filter_map(|r| r["key"].as_str()).collect();
+        let newcomers: Vec<Value> = rows
+            .iter()
+            .filter(|r| !held.contains(r["key"].as_str().unwrap_or("")))
+            .map(|r| {
+                let mut r = r.clone();
+                r["prefix"] = json!("");
+                r["depth"] = json!(0);
+                r
+            })
+            .collect();
         let mut by_key: std::collections::HashMap<String, Value> =
             rows.into_iter().map(|r| (r["key"].as_str().unwrap_or("").to_string(), r)).collect();
         rows = st
@@ -90,6 +103,7 @@ fn row_diff(st: &mut State, hold: bool) -> Value {
                 }
             })
             .collect();
+        rows.extend(newcomers);
     }
     let mut changed = Vec::new();
     for (i, r) in rows.iter().enumerate() {
