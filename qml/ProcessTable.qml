@@ -33,6 +33,10 @@ FocusScope {
     // The one row whose command tooltip may show; hovering anything else in
     // the table takes it away (a tooltip's own hover state can go stale).
     property string cmdTipKey: ""
+    // Scrollbars: shown while scrolling, hidden a moment after.
+    property bool scrollShown: false
+    function flashScrollbars() { scrollShown = true; scrollbarHide.restart() }
+    Timer { id: scrollbarHide; interval: 1200; onTriggered: table.scrollShown = false }
     Timer { id: tipHold; interval: 1200 }
     function holdTips() { tipHold.restart() }
     // Restored once rows first arrive: the selection and scroll position
@@ -554,8 +558,13 @@ FocusScope {
             boundsBehavior: Flickable.StopAtBounds
             highlightFollowsCurrentItem: false
             keyNavigationEnabled: false
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-            ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+            // Scrollbars show while scrolling or hovered, then fade out.
+            ScrollBar.vertical: ScrollBar {
+                policy: ScrollBar.AsNeeded
+                opacity: table.scrollShown || hovered || pressed ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 200 } }
+            }
+            ScrollBar.horizontal: hbar
             // Rows are as wide as the longest command line, and scroll sideways.
             contentWidth: Math.max(width, table.fixedWidth + 8 + (table.maxLineChars + 4) * table.cw)
             flickableDirection: Flickable.AutoFlickIfNeeded
@@ -574,8 +583,8 @@ FocusScope {
                     }
                 }
             }
-            onContentYChanged: table.scrollMoved()
-            onContentXChanged: table.scrollMoved()
+            onContentYChanged: { table.scrollMoved(); table.flashScrollbars() }
+            onContentXChanged: { table.scrollMoved(); table.flashScrollbars() }
             HoverHandler {
                 id: listHover
                 onHoveredChanged: table.monitor.set_frozen(hovered)
@@ -995,6 +1004,17 @@ FocusScope {
                 }
                 event.accepted = true
             }
+        }
+        // Sideways scrollbar in its own strip under the rows, so it never
+        // covers the last one; it fades out like the vertical one.
+        ScrollBar {
+            id: hbar
+            Layout.fillWidth: true
+            orientation: Qt.Horizontal
+            policy: ScrollBar.AsNeeded
+            visible: list.contentWidth > list.width + 1
+            opacity: table.scrollShown || hovered || pressed ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: 200 } }
         }
     }
 

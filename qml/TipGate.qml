@@ -8,6 +8,10 @@ import QtQuick
 Item {
     id: gate
     anchors.fill: parent
+    // On top: controls underneath take hover events for themselves, so a
+    // watcher below them never hears of the pointer. (It's passive: the
+    // events still reach everything underneath.)
+    z: 1000000
     property bool armed: false
     function disarm() { armed = false }
     HoverHandler {

@@ -357,13 +357,17 @@ ApplicationWindow {
                 anchors.fill: parent
                 spacing: 6
                 ToolButton {
+                    id: menuButton
                     icon.name: "application-menu"
                     ToolTip.text: "Options"
                     ToolTip.visible: hovered && tips.armed
-                    onClicked: optionsMenu.popup(this, 0, height)
+                    // A second click closes it (the press that closed the
+                    // menu mustn't open it again).
+                    property real closedAt: 0
+                    onClicked: if (Date.now() - closedAt > 300) optionsMenu.popup(this, 0, height)
                     Menu {
                         id: optionsMenu
-                        onClosed: tips.disarm()
+                        onClosed: { tips.disarm(); menuButton.closedAt = Date.now() }
                         KeyMenuItem { text: "Start at login (in the tray)"; icon.name: "system-run-symbolic"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
                         KeyMenuItem {
                             text: "Separate tray icon (besides the tray widget)"
@@ -428,19 +432,20 @@ ApplicationWindow {
                     readonly property var views: [
                         { t: "Tree", v: "tree", i: "view-list-tree-symbolic", k: "t" },
                         { t: "List", v: "flat", i: "view-list-text-symbolic", k: "F5" },
-                        { t: "Containers", v: "containers", i: "box-symbolic", k: "c" },
+                        { t: "Containers", v: "containers", i: "class-or-package-symbolic", k: "c" },
                         { t: "GPU", v: "gpu", i: "graphics-symbolic", k: "g" },
                     ]
                     readonly property var cur: views.find(x => x.v === win.view) || views[0]
                     icon.name: cur.i
                     text: cur.t + "  ▾"
-                    onClicked: viewMenu.popup(this, 0, height)
+                    property real closedAt: 0
+                    onClicked: if (Date.now() - closedAt > 300) viewMenu.popup(this, 0, height)
                     ToolTip.text: "View: the process tree, a flat list, grouped by container, or the GPU view"
                     ToolTip.visible: hovered && !viewMenu.visible && tips.armed
                     ToolTip.delay: 600
                     Menu {
                         id: viewMenu
-                        onClosed: tips.disarm()
+                        onClosed: { tips.disarm(); viewButton.closedAt = Date.now() }
                         Repeater {
                             model: viewButton.views
                             KeyMenuItem {
