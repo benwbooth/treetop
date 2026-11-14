@@ -558,10 +558,16 @@ FocusScope {
             // Scrollbars show while scrolling or hovered, then fade out.
             ScrollBar.vertical: ScrollBar {
                 policy: ScrollBar.AsNeeded
-                opacity: table.scrollShown || hovered || pressed ? 1 : 0
+                opacity: table.scrollShown || list.moving || hovered || pressed ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 200 } }
             }
-            ScrollBar.horizontal: hbar
+            // It overlays the last row, but only while you scroll or hover it.
+            ScrollBar.horizontal: ScrollBar {
+                id: hbar
+                policy: ScrollBar.AsNeeded
+                opacity: table.scrollShown || list.moving || hovered || pressed ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 200 } }
+            }
             // Rows are as wide as the longest command line, and scroll sideways.
             contentWidth: Math.max(width, table.fixedWidth + 8 + (table.maxLineChars + 4) * table.cw)
             flickableDirection: Flickable.AutoFlickIfNeeded
@@ -580,8 +586,13 @@ FocusScope {
                     }
                 }
             }
-            onContentYChanged: { table.scrollMoved(); table.flashScrollbars() }
-            onContentXChanged: { table.scrollMoved(); table.flashScrollbars() }
+            onContentYChanged: table.scrollMoved()
+            onContentXChanged: table.scrollMoved()
+            // Scrollbars show for your scrolling only (wheel, touchpad, a
+            // drag), not when updates keep the selected row in place.
+            onMovingChanged: if (moving) table.flashScrollbars()
+            Connections { target: ksV; function onWheel() { table.flashScrollbars() } }
+            Connections { target: ksH; function onWheel() { table.flashScrollbars() } }
             HoverHandler {
                 id: listHover
                 onHoveredChanged: table.monitor.set_frozen(hovered)
@@ -999,17 +1010,6 @@ FocusScope {
                 }
                 event.accepted = true
             }
-        }
-        // Sideways scrollbar in its own strip under the rows, so it never
-        // covers the last one; it fades out like the vertical one.
-        ScrollBar {
-            id: hbar
-            Layout.fillWidth: true
-            orientation: Qt.Horizontal
-            policy: ScrollBar.AsNeeded
-            visible: list.contentWidth > list.width + 1
-            opacity: table.scrollShown || hovered || pressed ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: 200 } }
         }
     }
 
