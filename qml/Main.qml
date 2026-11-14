@@ -302,7 +302,12 @@ ApplicationWindow {
     }
 
     // ---- window/tray plumbing (called from C++ for single-instance) -----
+    // Minimized, as KWin tells us (Wayland doesn't tell apps).
+    property bool minimizedByWm: false
     function showWindow() {
+        // A minimized toplevel ignores show(); a fresh one comes back where
+        // it was (the KWin placement script puts it there).
+        if (minimizedByWm) { win.hide(); minimizedByWm = false }
         if (win.restoreMaximized) win.showMaximized(); else win.show()
         win.raise()
         win.requestActivate()
@@ -314,7 +319,7 @@ ApplicationWindow {
     // Open (and not minimized) -> hide; otherwise show. Not "focused": a
     // click on the panel widget or tray takes focus away first.
     function toggleWindow() {
-        if (win.visible && win.visibility !== Window.Minimized) win.hide(); else showWindow()
+        if (win.visible && win.visibility !== Window.Minimized && !minimizedByWm) win.hide(); else showWindow()
     }
     onClosing: (close) => {
         // Closing hides to the tray (our icon or the tray widget).

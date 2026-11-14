@@ -1,6 +1,9 @@
 #include "treetop_app.h"
 
+#include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QSettings>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtGui/QScreen>
 #include <QtGui/QWindow>
@@ -9,6 +12,7 @@
 #endif
 #include <algorithm>
 #include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusConnectionInterface>
 #include <QtDBus/QDBusMessage>
 #include <QtDBus/QDBusVirtualObject>
 #include <QtGui/QFontDatabase>
@@ -21,6 +25,7 @@
 #include <QtQuickControls2/QQuickStyle>
 #include <QtWidgets/QApplication>
 
+#include <functional>
 #include <unistd.h>
 
 // com.benwbooth.treetop on the session bus: Toggle() / Show(), so the
@@ -30,13 +35,16 @@ namespace {
 class TreetopBus : public QDBusVirtualObject
 {
 public:
-    explicit TreetopBus(QObject *root) : m_root(root) {}
+    TreetopBus(QObject *root, std::function<void(QRect)> savePlacement) : m_root(root), m_savePlacement(std::move(savePlacement)) {}
     QString introspect(const QString &) const override
     {
         return QStringLiteral(
             "<interface name=\"com.benwbooth.treetop\">"
             "<method name=\"Toggle\"/><method name=\"Show\"/><method name=\"Hide\"/>"
             "<method name=\"Top\"><arg type=\"s\" direction=\"out\"/></method>"
+            "<method name=\"SavePlacement\"><arg type=\"d\" name=\"x\"/><arg type=\"d\" name=\"y\"/>"
+            "<arg type=\"d\" name=\"width\"/><arg type=\"d\" name=\"height\"/></method>"
+            "<method name=\"SetMinimized\"><arg type=\"b\" name=\"minimized\"/></method>"
             "</interface>");
     }
     bool handleMessage(const QDBusMessage &message, const QDBusConnection &connection) override
@@ -49,6 +57,20 @@ public:
             connection.send(message.createReply(json.toString()));
             return true;
         }
+        if (m == QLatin1String("SavePlacement")) {
+            // From our KWin script: where the window is (frame geometry).
+            const QVariantList a = message.arguments();
+            if (a.size() == 4 && m_savePlacement)
+                m_savePlacement(QRect(qRound(a[0].toDouble()), qRound(a[1].toDouble()), qRound(a[2].toDouble()), qRound(a[3].toDouble())));
+            connection.send(message.createReply());
+            return true;
+        }
+        if (m == QLatin1String("SetMinimized")) {
+            const QVariantList a = message.arguments();
+            if (!a.isEmpty()) m_root->setProperty("minimizedByWm", a.constFirst().toBool());
+            connection.send(message.createReply());
+            return true;
+        }
         const char *slot = m == QLatin1String("Toggle") ? "toggleWindow"
                          : m == QLatin1String("Show") ? "showWindow"
                          : m == QLatin1String("Hide") ? "hideWindow" : nullptr;
@@ -59,6 +81,108 @@ public:
     }
 private:
     QObject *m_root;
+    std::function<void(QRect)> m_savePlacement;
+};
+
+// Where the window goes on Wayland. An app can neither read nor set its
+// position there, and every hide to the tray makes a new toplevel that KWin
+// places afresh (and this KWin offers no session-restore protocol). So on
+// KDE treetop loads a small KWin script: it reports the window's frame
+// geometry over D-Bus as it moves, and puts the window back there whenever
+// it appears - after a hide, or when treetop starts again.
+class KWinPlacement
+{
+public:
+    void load()
+    {
+        if (!QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))
+            || !QDBusConnection::sessionBus().interface()->isServiceRegistered(QStringLiteral("org.kde.KWin")))
+            return;
+        QSettings s;
+        const QRect r = s.value(QStringLiteral("MainWindow/frameGeometry")).toRect();
+        const QString saved = r.isValid()
+            ? QStringLiteral("{x: %1, y: %2, width: %3, height: %4}").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height())
+            : QStringLiteral("null");
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QDir().mkpath(dir);
+        m_path = dir + QStringLiteral("/kwin-placement.js");
+        QFile f(m_path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+        f.write(QStringLiteral(R"JS(// Written by treetop: keeps its window where you left it (see treetop_app.cpp).
+let last = %1;
+function ours(w) { return w.resourceClass === "com.benwbooth.treetop" && w.normalWindow && !w.transient; }
+function report(w) {
+    if (w.deleted || w.minimized || w.fullScreen || w.maximizeMode !== 0) return;
+    const g = w.frameGeometry;
+    // Maximizing moves the frame before maximizeMode says so: a frame that
+    // fills the maximize area isn't a place to go back to.
+    const m = workspace.clientArea(KWin.MaximizeArea, w);
+    if (Math.abs(g.x - m.x) < 2 && Math.abs(g.y - m.y) < 2 && Math.abs(g.width - m.width) < 2 && Math.abs(g.height - m.height) < 2) return;
+    last = {x: g.x, y: g.y, width: g.width, height: g.height};
+    callDBus("com.benwbooth.treetop", "/treetop", "com.benwbooth.treetop", "SavePlacement", g.x, g.y, g.width, g.height);
+}
+function watch(w, place) {
+    if (!ours(w)) return;
+    if (place && last && w.maximizeMode === 0) w.frameGeometry = {x: last.x, y: last.y, width: last.width, height: last.height};
+    w.frameGeometryChanged.connect(() => report(w));
+    // Wayland never tells an app it was minimized; tell treetop, so a click
+    // on its tray icon or widget brings it back instead of "hiding" it.
+    const minimized = () => callDBus("com.benwbooth.treetop", "/treetop", "com.benwbooth.treetop", "SetMinimized", w.minimized);
+    w.minimizedChanged.connect(minimized);
+    minimized();
+    // A toplevel re-shown maximized has no size of its own to go back to:
+    // unmaximizing returns it to where it was before.
+    let before = last;
+    w.maximizedChanged.connect(() => {
+        if (w.maximizeMode !== 0) before = last;
+        else if (before) w.frameGeometry = {x: before.x, y: before.y, width: before.width, height: before.height};
+    });
+}
+workspace.windowAdded.connect(w => watch(w, true));
+for (const w of workspace.windowList()) watch(w, false);
+)JS").arg(saved).toUtf8());
+        f.close();
+        unload();
+        QDBusMessage reply = QDBusConnection::sessionBus().call(QDBusMessage::createMethodCall(
+            QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"), QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("loadScript"))
+            << m_path << QString::fromLatin1(kName));
+        if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty() || reply.arguments().constFirst().toInt() < 0)
+            return;
+        // start() runs every loaded script not yet running. Not
+        // Script<id>.run: KWin reuses the id of the script just unloaded,
+        // and that path can still reach the old, dead one.
+        QDBusConnection::sessionBus().call(QDBusMessage::createMethodCall(
+            QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"), QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("start")));
+        m_loaded = true;
+    }
+    void unload()
+    {
+        QDBusConnection::sessionBus().call(QDBusMessage::createMethodCall(
+            QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"), QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("unloadScript"))
+            << QString::fromLatin1(kName));
+    }
+    void save(const QRect &r)
+    {
+        if (!r.isValid()) return;
+        m_pending = r;
+        if (!m_timer) {
+            m_timer = new QTimer(qApp);
+            m_timer->setSingleShot(true);
+            m_timer->setInterval(400);
+            QObject::connect(m_timer, &QTimer::timeout, qApp, [this] {
+                QSettings s;
+                s.setValue(QStringLiteral("MainWindow/frameGeometry"), m_pending);
+            });
+        }
+        m_timer->start();
+    }
+    bool loaded() const { return m_loaded; }
+private:
+    static constexpr const char *kName = "treetop-placement";
+    QString m_path;
+    QRect m_pending;
+    QTimer *m_timer = nullptr;
+    bool m_loaded = false;
 };
 }
 
@@ -198,6 +322,10 @@ int treetopRun(bool startHidden, bool toggle)
         return 1;
     }
     QObject *root = engine.rootObjects().constFirst();
+    static KWinPlacement placement;
+    // Before the first show, so the script sees the window appear.
+    placement.load();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, [] { if (placement.loaded()) placement.unload(); });
     if (auto *window = qobject_cast<QWindow *>(root)) {
         auto *state = new WindowState(window);
         // QML decided whether to start visible (tray start, rebuild restart).
@@ -205,7 +333,7 @@ int treetopRun(bool startHidden, bool toggle)
             state->showRestored();
     }
 
-    static TreetopBus bus(root);
+    static TreetopBus bus(root, [](QRect r) { placement.save(r); });
     QDBusConnection session = QDBusConnection::sessionBus();
     session.registerVirtualObject(QStringLiteral("/treetop"), &bus);
     session.registerService(QStringLiteral("com.benwbooth.treetop"));
