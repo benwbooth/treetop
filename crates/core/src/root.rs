@@ -221,12 +221,52 @@ fn peer_uid(stream: &std::os::unix::net::UnixStream) -> Option<u32> {
     (r == 0).then_some(cred.uid)
 }
 
+/// Moves the helper into a systemd scope of its own (re-running itself
+/// under `systemd-run --scope`, which keeps stdin/stdout and the
+/// environment). Otherwise it stays in the cgroup of whatever started
+/// treetop, and while it lingers it keeps that unit alive: a user service
+/// can't stop a root process, so the app couldn't be launched again until
+/// the helper gave up. Without systemd it just carries on where it is.
+fn own_scope() {
+    const MARK: &str = "TREETOP_HELPER_SCOPED";
+    if std::env::var_os(MARK).is_some() || unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    if !std::path::Path::new("/run/systemd/system").is_dir() {
+        return;
+    }
+    let candidates = ["/run/current-system/sw/bin/systemd-run", "/usr/bin/systemd-run", "/bin/systemd-run"];
+    let Some(run) = candidates.iter().map(std::path::Path::new).find(|p| p.is_file()) else { return };
+    let Ok(exe) = std::env::current_exe() else { return };
+    // A trial run first: if systemd-run can't make scopes here, exec-ing it
+    // would cost us root mode.
+    let works = std::process::Command::new(run)
+        .args(["--scope", "--quiet", "--collect", "--", "/bin/sh", "-c", ":"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !works {
+        return;
+    }
+    use std::os::unix::process::CommandExt;
+    // exec only returns on failure; then we stay where we are.
+    let _ = std::process::Command::new(run)
+        .args(["--scope", "--quiet", "--collect", "--description=treetop root helper", "--"])
+        .arg(exe)
+        .arg("--root-helper")
+        .env(MARK, "1")
+        .exec();
+}
+
 /// `treetop --root-helper`, run as root through pkexec or sudo. Serves the
 /// app that started it over stdin/stdout, and at once also listens on a
 /// socket only the authorizing user can use: other treetop windows and
 /// terminals join without another prompt. Once nobody has been connected
 /// for LINGER it exits (a restart or rebuild within that reconnects).
 pub fn helper_main() {
+    own_scope();
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     let st = Arc::new(Mutex::new(HelperState {
