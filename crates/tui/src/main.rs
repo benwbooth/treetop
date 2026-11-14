@@ -79,7 +79,16 @@ fn sudo_then_root(app: &mut App) {
     }
 }
 
+static QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_quit_signal(_: libc::c_int) {
+    QUIT.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 fn run() -> std::io::Result<()> {
+    for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+        unsafe { libc::signal(sig, on_quit_signal as *const () as usize) };
+    }
     let engine = Engine::new();
     let (tx, rx) = mpsc::channel::<Msg>();
     let mut app = App::new(engine.clone(), tx.clone());
@@ -97,14 +106,10 @@ fn run() -> std::io::Result<()> {
     let mut geo = None;
     let mut redraw = true;
     let mut last_draw = Instant::now();
-    let mut last_reload = Instant::now();
-    app.reload_settings();
     loop {
-        // Settings the window changed meanwhile.
-        if last_reload.elapsed() > Duration::from_secs(2) {
-            last_reload = Instant::now();
-            app.save();
-            app.reload_settings();
+        // TERM/HUP/INT: leave like q, so the settings are saved.
+        if QUIT.load(std::sync::atomic::Ordering::SeqCst) {
+            app.quit = true;
         }
         while let Ok(m) = rx.try_recv() {
             app.on_msg(m);
@@ -142,9 +147,10 @@ fn run() -> std::io::Result<()> {
                 _ => continue,
             }
             redraw = true;
-            app.save();
         }
     }
+    // Settings carry over on exit: only what changed in this session is
+    // merged into the shared file (the window picks it up on its next start).
     app.save();
     leave();
     Ok(())

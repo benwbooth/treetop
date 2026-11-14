@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtCore as QtCore
 import Qt.labs.platform as Platform
@@ -98,7 +99,11 @@ ApplicationWindow {
     property int collapsedCount: 0
     property string view: settings.view
 
+    // The window works on its own copy of the shared settings (C++ sets
+    // settingsUrl); what you change here is merged into the shared file
+    // when treetop exits, so the terminal version sees it on its next start.
     QtCore.Settings {
+        location: typeof settingsUrl !== "undefined" ? settingsUrl : ""
         id: settings
         property int interval: 1000
         property string view: "tree"
@@ -134,33 +139,6 @@ ApplicationWindow {
     Monitor {
         id: mon
         onUpdated: (json) => win.apply(JSON.parse(json))
-    }
-    // The terminal version (treetop-tui) shares these settings: take its
-    // changes, so ours never write back stale values over them.
-    property real settingsStamp: 0
-    Timer { interval: 1500; running: true; repeat: true; onTriggered: win.reloadSettings() }
-    function reloadSettings() {
-        const t = mon.settings_stamp()
-        if (t === settingsStamp) return
-        settingsStamp = t
-        const v = JSON.parse(mon.shared_settings())
-        for (const k in v) {
-            if (settings[k] === undefined || settings[k] === v[k]) continue
-            settings[k] = v[k]
-            switch (k) {
-            case "view": setView(v[k]); break
-            case "sortKey": case "sortDesc":
-                table.sortKey = settings.sortKey; table.sortDesc = settings.sortDesc
-                mon.set_sort(settings.sortKey, settings.sortDesc); break
-            case "filterText": if (filterField.text !== v[k]) filterField.text = v[k]; break
-            case "showKernel": mon.set_show_kernel(v[k]); mon.refresh(); break
-            case "hiddenColumns": table.hiddenColumns = v[k].split(",").filter(x => x.length > 0); break
-            case "columnWidths": try { table.widthOverride = JSON.parse(v[k]) } catch (e) {} break
-            case "columnOrder": try { table.columnOrder = JSON.parse(v[k]) } catch (e) {} break
-            case "storeStyle": table.storeStyle = v[k]; break
-            case "shortenStorePaths": table.shortenStorePaths = v[k]; break
-            }
-        }
     }
     property bool booted: false
     property bool autostart: false
@@ -246,7 +224,6 @@ ApplicationWindow {
             settings.columnsVersion = 1
         }
         mon.mark_alive(win.wantVisible)
-        settingsStamp = mon.settings_stamp()
         autostart = mon.autostart_enabled()
         mon.set_interval(settings.interval)
         mon.set_rows_enabled(win.visible)
@@ -370,58 +347,12 @@ ApplicationWindow {
         // Toolbar
         ToolBar {
             Layout.fillWidth: true
+            id: toolbar
+            // Narrow window: icons only, so nothing falls off the end.
+            readonly property bool compact: width < 1000
             RowLayout {
                 anchors.fill: parent
                 spacing: 6
-                ButtonGroup { id: viewGroup }
-                ToolButton { text: "Tree"; checkable: true; checked: win.view === "tree"; ButtonGroup.group: viewGroup; onClicked: win.setView("tree"); icon.name: "view-list-tree" }
-                ToolButton { text: "List"; checkable: true; checked: win.view === "flat"; ButtonGroup.group: viewGroup; onClicked: win.setView("flat"); icon.name: "view-list-details" }
-                ToolButton { text: "Containers"; checkable: true; checked: win.view === "containers"; ButtonGroup.group: viewGroup; onClicked: win.setView("containers"); icon.name: "application-x-docker" }
-                ToolButton { text: "GPU"; checkable: true; checked: win.view === "gpu"; ButtonGroup.group: viewGroup; onClicked: win.setView("gpu"); icon.name: "video-display" }
-                ToolSeparator { visible: win.view === "tree" || win.view === "containers" }
-                ToolButton {
-                    // One toggle: expands everything if anything is collapsed,
-                    // otherwise collapses to the top-level processes.
-                    visible: win.view === "tree" || win.view === "containers"
-                    readonly property bool anyCollapsed: win.collapsedCount > 0
-                    icon.name: anyCollapsed ? "expand-all" : "collapse-all"
-                    text: anyCollapsed ? "Expand all" : "Collapse all"
-                    onClicked: mon.set_expanded_all(anyCollapsed)
-                    ToolTip.text: anyCollapsed ? "Expand every branch of the tree (*)" : "Collapse the tree to its top-level processes (_)"
-                    ToolTip.visible: hovered
-                }
-                ToolSeparator {}
-                TextField {
-                    id: filterField
-                    Layout.preferredWidth: 280
-                    placeholderText: "Filter: name, command, user, container, PID  (/)"
-                    onTextChanged: { mon.set_filter(text); settings.filterText = text }
-                    Keys.onDownPressed: table.forceActiveFocus()
-                    Keys.onReturnPressed: table.forceActiveFocus()
-                }
-                CheckBox { text: "Kernel threads"; checked: settings.showKernel; onToggled: { settings.showKernel = checked; mon.set_show_kernel(checked); table.refreshRows() } }
-                Item { Layout.fillWidth: true }
-                ToolButton {
-                    // Root mode indicator / switch.
-                    icon.name: win.snap.root ? "object-unlocked" : "object-locked"
-                    text: win.snap.root ? "root" : ""
-                    checkable: true
-                    checked: !!win.snap.root
-                    onClicked: { settings.rootMode = !win.snap.root; mon.set_root_mode(!win.snap.root) }
-                    ToolTip.text: win.snap.root
-                        ? "Root access is on: every process's disk I/O, GPU use, executable path, environment and open files are visible, and signals to root's processes need no further prompts. Click to turn off."
-                        : "Root access is off: other users' (e.g. root's) disk I/O, GPU use, paths, environment and files are hidden by the kernel. Click to turn it on (asks polkit once)."
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 400
-                }
-                Label { text: "Update"; color: win.dimColor }
-                ComboBox {
-                    model: [{ t: "0.25 s", v: 250 }, { t: "0.5 s", v: 500 }, { t: "1 s", v: 1000 }, { t: "2 s", v: 2000 }, { t: "5 s", v: 5000 }]
-                    textRole: "t"
-                    valueRole: "v"
-                    Component.onCompleted: currentIndex = indexOfValue(settings.interval)
-                    onActivated: settings.interval = currentValue
-                }
                 ToolButton {
                     icon.name: "application-menu"
                     ToolTip.text: "Options"
@@ -429,17 +360,19 @@ ApplicationWindow {
                     onClicked: optionsMenu.popup(this, 0, height)
                     Menu {
                         id: optionsMenu
-                        MenuItem { text: "Start at login (in the tray)"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
-                        MenuItem {
+                        KeyMenuItem { text: "Start at login (in the tray)"; icon.name: "system-run-symbolic"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
+                        KeyMenuItem {
                             text: "Separate tray icon (besides the tray widget)"
+                            icon.name: "preferences-desktop-notification-symbolic"
                             visible: win.widgetInTray
                             height: visible ? implicitHeight : 0
                             checkable: true
                             checked: settings.ownTrayIcon
                             onTriggered: settings.ownTrayIcon = !settings.ownTrayIcon
                         }
-                        MenuItem {
+                        KeyMenuItem {
                             text: win.snap.rootStarting ? "Root access (waiting for polkit…)" : "Root access (polkit)"
+                            icon.name: win.snap.root ? "object-unlocked-symbolic" : "object-locked-symbolic"
                             checkable: true
                             checked: !!win.snap.root
                             enabled: !win.snap.rootStarting
@@ -447,6 +380,7 @@ ApplicationWindow {
                         }
                         Menu {
                             title: "GPUs"
+                            icon.name: "graphics-symbolic"
                             Repeater {
                                 model: win.snap.gpus.length
                                 MenuItem {
@@ -458,16 +392,103 @@ ApplicationWindow {
                                 }
                             }
                         }
+                        Menu {
+                            title: "Update every"
+                            icon.name: "chronometer-symbolic"
+                            Repeater {
+                                model: [{ t: "0.25 s", v: 250 }, { t: "0.5 s", v: 500 }, { t: "1 s", v: 1000 }, { t: "2 s", v: 2000 }, { t: "5 s", v: 5000 }]
+                                MenuItem {
+                                    text: modelData.t
+                                    checkable: true
+                                    checked: settings.interval === modelData.v
+                                    onTriggered: settings.interval = modelData.v
+                                }
+                            }
+                        }
                         MenuSeparator {}
-                        MenuItem { text: "Show resources (r)"; checkable: true; checked: settings.showResources; onTriggered: settings.showResources = !settings.showResources }
-                        MenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
-                        MenuItem { text: "Meters"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
-                        MenuItem { text: "Combine CPU cores (1)"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
-                        MenuItem { text: "Tint resource columns"; checkable: true; checked: settings.tintColumns; onTriggered: settings.tintColumns = !settings.tintColumns }
+                        KeyMenuItem { text: "Show resources"; keys: "r"; icon.name: "office-chart-line-symbolic"; checkable: true; checked: settings.showResources; onTriggered: settings.showResources = !settings.showResources }
+                        KeyMenuItem { text: "Graphs"; icon.name: "office-chart-area-symbolic"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
+                        KeyMenuItem { text: "Meters"; icon.name: "view-statistics-symbolic"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
+                        KeyMenuItem { text: "Combine CPU cores"; keys: "1"; icon.name: "merge-symbolic"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
+                        KeyMenuItem { text: "Tint resource columns"; icon.name: "color-fill-symbolic"; checkable: true; checked: settings.tintColumns; onTriggered: settings.tintColumns = !settings.tintColumns }
+                        KeyMenuItem { text: "Kernel threads"; keys: "K"; icon.name: "preferences-system-symbolic"; checkable: true; checked: settings.showKernel; onTriggered: { settings.showKernel = !settings.showKernel; mon.set_show_kernel(settings.showKernel); table.refreshRows() } }
                         MenuSeparator {}
-                        MenuItem { text: "Keys… (h)"; icon.name: "help-contents"; onTriggered: helpDialog.open() }
-                        MenuItem { text: "Quit"; icon.name: "application-exit"; onTriggered: Qt.quit() }
+                        KeyMenuItem { text: "Keys…"; keys: "h"; icon.name: "input-keyboard-symbolic"; onTriggered: helpDialog.open() }
+                        KeyMenuItem { text: "Quit"; keys: "Ctrl+Q"; icon.name: "application-exit-symbolic"; onTriggered: Qt.quit() }
                     }
+                }
+                ToolSeparator {}
+                // The view, as one drop-down (t, c and g switch too).
+                ToolButton {
+                    id: viewButton
+                    readonly property var views: [
+                        { t: "Tree", v: "tree", i: "view-list-tree-symbolic", k: "t" },
+                        { t: "List", v: "flat", i: "view-list-text-symbolic", k: "F5" },
+                        { t: "Containers", v: "containers", i: "box-symbolic", k: "c" },
+                        { t: "GPU", v: "gpu", i: "graphics-symbolic", k: "g" },
+                    ]
+                    readonly property var cur: views.find(x => x.v === win.view) || views[0]
+                    icon.name: cur.i
+                    text: cur.t + "  ▾"
+                    onClicked: viewMenu.popup(this, 0, height)
+                    ToolTip.text: "View: the process tree, a flat list, grouped by container, or the GPU view"
+                    ToolTip.visible: hovered && !viewMenu.visible
+                    ToolTip.delay: 600
+                    Menu {
+                        id: viewMenu
+                        Repeater {
+                            model: viewButton.views
+                            KeyMenuItem {
+                                required property var modelData
+                                text: modelData.t
+                                icon.name: modelData.i
+                                keys: modelData.k
+                                checkable: true
+                                checked: win.view === modelData.v
+                                onTriggered: win.setView(modelData.v)
+                            }
+                        }
+                    }
+                }
+                ToolSeparator { visible: win.view === "tree" || win.view === "containers" }
+                ToolButton {
+                    // One toggle: expands everything if anything is collapsed,
+                    // otherwise collapses to the top-level processes.
+                    visible: win.view === "tree" || win.view === "containers"
+                    display: toolbar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
+                    readonly property bool anyCollapsed: win.collapsedCount > 0
+                    icon.name: anyCollapsed ? "expand-all" : "collapse-all"
+                    text: anyCollapsed ? "Expand all" : "Collapse all"
+                    onClicked: mon.set_expanded_all(anyCollapsed)
+                    ToolTip.text: anyCollapsed ? "Expand every branch of the tree (*)" : "Collapse the tree to its top-level processes (_)"
+                    ToolTip.visible: hovered
+                }
+                ToolSeparator {}
+                TextField {
+                    id: filterField
+                    Layout.preferredWidth: 400
+                    Layout.minimumWidth: 120
+                    Layout.maximumWidth: 480
+                    Layout.fillWidth: true
+                    placeholderText: "Filter: name, command, user, container, PID  (/)"
+                    onTextChanged: { mon.set_filter(text); settings.filterText = text }
+                    Keys.onDownPressed: table.forceActiveFocus()
+                    Keys.onReturnPressed: table.forceActiveFocus()
+                }
+                CheckBox { visible: !toolbar.compact; text: "Kernel threads"; checked: settings.showKernel; onToggled: { settings.showKernel = checked; mon.set_show_kernel(checked); table.refreshRows() } }
+                Item { Layout.fillWidth: true }
+                ToolButton {
+                    // Root mode indicator / switch.
+                    icon.name: win.snap.root ? "object-unlocked-symbolic" : "object-locked-symbolic"
+                    text: win.snap.root ? "root" : ""
+                    checkable: true
+                    checked: !!win.snap.root
+                    onClicked: { settings.rootMode = !win.snap.root; mon.set_root_mode(!win.snap.root) }
+                    ToolTip.text: win.snap.root
+                        ? "Root access is on: every process's disk I/O, GPU use, executable path, environment and open files are visible, and signals to root's processes need no further prompts. Click to turn off."
+                        : "Root access is off: other users' (e.g. root's) disk I/O, GPU use, paths, environment and files are hidden by the kernel. Click to turn it on (asks polkit once)."
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 400
                 }
             }
         }

@@ -14,6 +14,7 @@ fn main() {
         "qml/SectionHeader.qml",
         "qml/HiddenChip.qml",
         "qml/KineticScroll.qml",
+        "qml/KeyMenuItem.qml",
     ]))
     .crate_include_root(Some("native".to_owned()))
     .qrc_resources(["qml/treetop.svg", "qml/Fmt.js"])

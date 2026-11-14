@@ -241,10 +241,15 @@ pub fn helper_main() {
 
     // Who asked for root: polkit says PKEXEC_UID, sudo says SUDO_UID.
     let uid = ["PKEXEC_UID", "SUDO_UID"].iter().find_map(|k| std::env::var(k).ok().and_then(|u| u.parse::<u32>().ok()));
-    let path = uid.map(socket_path);
+    // Another helper already serving the socket keeps it: this one serves
+    // only its own app (and doesn't leave the other unreachable).
+    let path = uid.map(socket_path).filter(|p| std::os::unix::net::UnixStream::connect(p).is_err());
+    // Our socket's inode, so we remove only our own on the way out.
+    let mut ours: Option<u64> = None;
     if let (Some(uid), Some(path)) = (uid, path.clone()) {
         let _ = std::fs::remove_file(&path);
         if let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) {
+            ours = std::fs::metadata(&path).ok().map(|m| std::os::unix::fs::MetadataExt::ino(&m));
             if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) {
                 unsafe {
                     libc::chmod(c.as_ptr(), 0o600);
@@ -286,7 +291,9 @@ pub fn helper_main() {
         }
     }
     if let Some(p) = path {
-        let _ = std::fs::remove_file(&p);
+        if std::fs::metadata(&p).ok().map(|m| std::os::unix::fs::MetadataExt::ino(&m)) == ours {
+            let _ = std::fs::remove_file(&p);
+        }
     }
 }
 

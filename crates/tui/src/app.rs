@@ -27,7 +27,7 @@ pub enum Act {
     ToggleKernel,
     ToggleRoot,
     SetInterval(i64),
-    ChooseInterval,
+    ChooseView,
     Options,
     ToggleResources,
     ToggleCards,
@@ -243,7 +243,6 @@ pub struct App {
     /// Asked for the sudo password: the main loop does that on the terminal.
     pub want_sudo: bool,
     restored: bool,
-    settings_mtime: Option<std::time::SystemTime>,
 }
 
 pub fn launcher() -> treetop_core::root::Launcher {
@@ -301,7 +300,6 @@ impl App {
             signals,
             want_sudo: false,
             restored: false,
-            settings_mtime: None,
         };
         // The engine starts with the shared settings.
         let o = &app.opts;
@@ -353,46 +351,6 @@ impl App {
                 }
             }
         });
-        self.settings_mtime = std::fs::metadata(settings::path()).and_then(|m| m.modified()).ok();
-    }
-
-    /// The Qt app changed the shared settings: take its new values (except
-    /// ones we've changed and not saved yet).
-    pub fn reload_settings(&mut self) {
-        let path = settings::path();
-        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if mtime == self.settings_mtime {
-            return;
-        }
-        let first = self.settings_mtime.is_none();
-        self.settings_mtime = mtime;
-        if first || !self.dirty.is_empty() {
-            return;
-        }
-        let n = Opts::load(&Settings::load());
-        let o = &mut self.opts;
-        if n.view != o.view {
-            self.engine.set_view(&n.view);
-        }
-        if n.sort_key != o.sort_key || n.sort_desc != o.sort_desc {
-            self.engine.set_sort(&n.sort_key, n.sort_desc);
-        }
-        if n.filter != o.filter {
-            self.engine.set_filter(&n.filter);
-        }
-        if n.show_kernel != o.show_kernel {
-            self.engine.set_show_kernel(n.show_kernel);
-        }
-        if n.interval != o.interval {
-            self.engine.set_interval(n.interval as i32);
-        }
-        if n.effective_store_style() != o.effective_store_style() {
-            self.engine.set_store_style(n.effective_store_style());
-        }
-        // Root mode stays as this session set it.
-        let root = o.root_mode;
-        *o = n;
-        o.root_mode = root;
     }
 
     fn mark(&mut self, k: &'static str) {
@@ -804,7 +762,7 @@ impl App {
         let sigs: Vec<Item> = self.signals.iter().map(|(n, v)| Item::Act(format!("{n} ({v})"), Act::Signal(*v))).collect();
         vec![
             Item::Title(title),
-            Item::Act(if focused { "Show all processes (f)".into() } else { "Focus on this process tree (f)".into() }, Act::ToggleFocusCurrent),
+            Item::Act(if focused { "Show all processes\tf".into() } else { "Focus on this process tree\tf".into() }, Act::ToggleFocusCurrent),
             Item::Sep,
             Item::Act("Terminate (15)".into(), Act::Signal(15)),
             Item::Act("Kill (9)".into(), Act::Signal(9)),
@@ -812,15 +770,15 @@ impl App {
             Item::Act("Continue (18)".into(), Act::Signal(18)),
             Item::Sub("Send signal".into(), sigs),
             Item::Sep,
-            Item::Act("Nice +1".into(), Act::Renice(1)),
-            Item::Act("Nice −1".into(), Act::Renice(-1)),
+            Item::Act("Nice +1\tF8".into(), Act::Renice(1)),
+            Item::Act("Nice −1\tF7".into(), Act::Renice(-1)),
             Item::Sep,
-            Item::Act("Details… (Enter)".into(), Act::Details),
-            Item::Act("Collapse / expand".into(), Act::ToggleCurrent),
-            Item::Act("Expand all".into(), Act::ExpandAll),
-            Item::Act("Collapse all".into(), Act::CollapseAll),
+            Item::Act("Details…\tEnter".into(), Act::Details),
+            Item::Act("Collapse / expand\t+ −".into(), Act::ToggleCurrent),
+            Item::Act("Expand all\t*".into(), Act::ExpandAll),
+            Item::Act("Collapse all\t_".into(), Act::CollapseAll),
             Item::Sep,
-            if self.tagged.is_empty() { Item::Act("Clear tags".into(), Act::Nothing) } else { Item::Act("Clear tags".into(), Act::ClearTags) },
+            if self.tagged.is_empty() { Item::Act("Clear tags\tU".into(), Act::Nothing) } else { Item::Act("Clear tags\tU".into(), Act::ClearTags) },
         ]
     }
 
@@ -861,16 +819,16 @@ impl App {
             Item::Check(root.into(), self.root_on, if self.root_starting { Act::Nothing } else { Act::ToggleRoot }),
             Item::Sub("GPUs".into(), self.gpu_items()),
             Item::Sep,
-            Item::Check("Show resources (r)".into(), o.show_resources, Act::ToggleResources),
+            Item::Check("Show resources\tr".into(), o.show_resources, Act::ToggleResources),
             Item::Check("Graphs".into(), o.show_cards, Act::ToggleCards),
             Item::Check("Meters".into(), o.show_meters, Act::ToggleMeters),
-            Item::Check("Combine CPU cores (1)".into(), o.cpu_combined, Act::ToggleCpuCombined),
+            Item::Check("Combine CPU cores\t1".into(), o.cpu_combined, Act::ToggleCpuCombined),
             Item::Check("Tint resource columns".into(), o.tint, Act::ToggleTint),
-            Item::Check("Kernel threads (K)".into(), o.show_kernel, Act::ToggleKernel),
-            Item::Sub("Update".into(), self.interval_items()),
+            Item::Check("Kernel threads\tK".into(), o.show_kernel, Act::ToggleKernel),
+            Item::Sub("Update every".into(), self.interval_items()),
             Item::Sep,
-            Item::Act("Keys… (h)".into(), Act::Help),
-            Item::Act("Quit (q)".into(), Act::Quit),
+            Item::Act("Keys…\th".into(), Act::Help),
+            Item::Act("Quit\tq".into(), Act::Quit),
         ]
     }
 
@@ -889,7 +847,7 @@ impl App {
         let mut v = vec![
             Item::Check("Graphs".into(), o.show_cards, Act::ToggleCards),
             Item::Check("Meters".into(), o.show_meters, Act::ToggleMeters),
-            Item::Check("Combine CPU cores (1)".into(), o.cpu_combined, Act::ToggleCpuCombined),
+            Item::Check("Combine CPU cores\t1".into(), o.cpu_combined, Act::ToggleCpuCombined),
             Item::Sep,
         ];
         for g in self.gpus() {
@@ -902,7 +860,7 @@ impl App {
     pub fn gpu_menu(&self, g: &GpuEntry) -> Vec<Item> {
         vec![
             Item::Act(format!("Hide GPU {}", g.number), Act::SetGpuShown(g.pdev.clone(), false)),
-            Item::Act("GPU view (g)".into(), Act::ToggleView("gpu")),
+            Item::Act("GPU view\tg".into(), Act::ToggleView("gpu")),
         ]
     }
 
@@ -936,14 +894,18 @@ impl App {
                 self.engine.set_interval(ms as i32);
                 self.mark("interval");
             }
-            Act::ChooseInterval => {
-                // Under the Update button, at the right.
-                let items = self.interval_items();
-                self.open_menu(items, u16::MAX, 1);
+            Act::ChooseView => {
+                let v = self.opts.view.clone();
+                let items = [("Tree\tt", "tree"), ("List\tF5", "flat"), ("Containers\tc", "containers"), ("GPU\tg", "gpu")]
+                    .into_iter()
+                    .map(|(t, k)| Item::Check(t.into(), v == k, Act::SetView(k)))
+                    .collect();
+                self.open_menu(items, 4, 1);
             }
             Act::Options => {
+                // Under ☰, the first thing in the toolbar.
                 let items = self.options_menu();
-                self.open_menu(items, u16::MAX, 1);
+                self.open_menu(items, 0, 1);
             }
             Act::ToggleResources => {
                 self.opts.show_resources = !self.opts.show_resources;

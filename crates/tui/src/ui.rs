@@ -142,11 +142,15 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
         g.hits.push((Rect::new(*x, y, n, 1), hit));
         *x += n + 1;
     };
-    for (label, v) in [("Tree", "tree"), ("List", "flat"), ("Containers", "containers"), ("GPU", "gpu")] {
-        let on = app.view() == v;
-        let style = if on { Style::default().bg(theme::over_bg(theme::HIGHLIGHT, 0.35)).fg(theme::text()).add_modifier(Modifier::BOLD) } else { st(theme::text()) };
-        item(buf, g, &mut x, &format!(" {label} "), style, Hit::Act(Act::SetView(v)));
-    }
+    item(buf, g, &mut x, "☰", st(theme::text()).add_modifier(Modifier::BOLD), Hit::Act(Act::Options));
+    let vname = match app.view() {
+        "flat" => "List",
+        "containers" => "Containers",
+        "gpu" => "GPU",
+        _ => "Tree",
+    };
+    let style = Style::default().bg(theme::over_bg(theme::HIGHLIGHT, 0.25)).fg(theme::text()).add_modifier(Modifier::BOLD);
+    item(buf, g, &mut x, &format!(" {vname} ▾ "), style, Hit::Act(Act::ChooseView));
     if matches!(app.view(), "tree" | "containers") {
         put(buf, x, y, "│", st(theme::dim()), 1);
         x += 2;
@@ -180,13 +184,9 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
     let k = if app.opts.show_kernel { "☑ Kernel threads" } else { "☐ Kernel threads" };
     item(buf, g, &mut x, k, st(theme::text()), Hit::Act(Act::ToggleKernel));
     // Right side: root, update interval, options.
-    let iv = app.opts.interval;
-    let ivs = if iv < 1000 { format!("{} s", iv as f64 / 1000.0) } else { format!("{} s", iv / 1000) };
     let root = if app.root_starting { "◌ root…" } else if app.root_on { "◉ root" } else { "○ root" };
     let right = [
         (root.to_string(), if app.root_on { st(hex(theme::ORANGE)).add_modifier(Modifier::BOLD) } else { st(theme::dim()) }, Hit::Act(Act::ToggleRoot)),
-        (format!("Update {ivs} ▾"), st(theme::text()), Hit::Act(Act::ChooseInterval)),
-        ("☰".to_string(), st(theme::text()).add_modifier(Modifier::BOLD), Hit::Act(Act::Options)),
     ];
     let total: u16 = right.iter().map(|(t, _, _)| t.chars().count() as u16 + 2).sum();
     let mut rx = w.saturating_sub(total).max(x);
@@ -1136,7 +1136,7 @@ fn popups(buf: &mut Buffer, app: &mut App, g: &mut Geometry, area: Rect) {
             let mut px = 0u16;
             let mut py = 0u16;
             for (level, m) in stack.iter_mut().enumerate() {
-                let w = m.items.iter().map(|i| i.label().chars().count() + if matches!(i, Item::Sub(..)) { 3 } else { 0 }).max().unwrap_or(10) as u16 + 4;
+                let w = m.items.iter().map(|i| i.label().chars().count() + if matches!(i, Item::Sub(..)) { 3 } else { 0 } + 2).max().unwrap_or(10) as u16 + 4;
                 let h = m.items.len() as u16 + 2;
                 let w = w.min(area.width);
                 let h = h.min(area.height);
@@ -1173,7 +1173,13 @@ fn popups(buf: &mut Buffer, app: &mut App, g: &mut Geometry, area: Rect) {
                         }
                         _ => {
                             let fgc = if it.selectable() { theme::text() } else { theme::dim() };
-                            put(buf, x + 2, iy, &it.label(), st(fgc).bg(bg), w - 4);
+                            let label = it.label();
+                            let (text, keys) = label.split_once('\t').unwrap_or((&label, ""));
+                            put(buf, x + 2, iy, text, st(fgc).bg(bg), w - 4);
+                            if !keys.is_empty() {
+                                let kw = keys.chars().count() as u16;
+                                put(buf, x + w - 2 - kw - if matches!(it, Item::Sub(..)) { 2 } else { 0 }, iy, keys, st(theme::dim()).bg(bg), kw);
+                            }
                             if matches!(it, Item::Sub(..)) {
                                 put(buf, x + w - 3, iy, "▸", st(fgc).bg(bg), 1);
                             }

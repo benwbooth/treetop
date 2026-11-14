@@ -26,7 +26,23 @@
 #include <QtWidgets/QApplication>
 
 #include <functional>
+#include <csignal>
+#include <sys/socket.h>
 #include <unistd.h>
+#include <QtCore/QSocketNotifier>
+
+extern "C" char *treetop_settings_begin();
+extern "C" void treetop_string_free(char *);
+
+// TERM/HUP (devloop restarting us, logging out) quit like Ctrl+Q, so the
+// settings are saved and merged. The handler only writes to a socket; Qt
+// reads it on the main thread.
+static int s_signalFd[2] = {-1, -1};
+static void onQuitSignal(int)
+{
+    const char c = 1;
+    [[maybe_unused]] auto n = ::write(s_signalFd[0], &c, 1);
+}
 
 // com.benwbooth.treetop on the session bus: Toggle() / Show(), so the
 // panel widget and tray can show/hide the window without needing treetop
@@ -317,6 +333,26 @@ int treetopRun(bool startHidden, bool toggle)
     engine.rootContext()->setContextProperty(QStringLiteral("systemFixedFont"),
         QFontDatabase::systemFont(QFontDatabase::FixedFont));
     engine.setInitialProperties({{QStringLiteral("startHidden"), startHidden}});
+    // The single instance: settings in a private copy until we exit.
+    {
+        char *p = treetop_settings_begin();
+        engine.rootContext()->setContextProperty(QStringLiteral("settingsUrl"), QUrl::fromLocalFile(QString::fromUtf8(p)));
+        treetop_string_free(p);
+    }
+    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, s_signalFd) == 0) {
+        auto *sn = new QSocketNotifier(s_signalFd[1], QSocketNotifier::Read, &app);
+        QObject::connect(sn, &QSocketNotifier::activated, &app, [] {
+            char c;
+            [[maybe_unused]] auto n = ::read(s_signalFd[1], &c, 1);
+            QCoreApplication::quit();
+        });
+        struct sigaction sa {};
+        sa.sa_handler = onQuitSignal;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        sigaction(SIGTERM, &sa, nullptr);
+        sigaction(SIGHUP, &sa, nullptr);
+    }
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/com/benwbooth/treetop/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) {
         return 1;

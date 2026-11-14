@@ -106,12 +106,6 @@ pub mod qobject {
         fn mark_alive(self: &Monitor, visible: bool);
         #[qinvokable]
         fn last_alive(self: &Monitor) -> QString;
-        /// When the shared settings file last changed, and its shared values
-        /// (to pick up the terminal version's changes).
-        #[qinvokable]
-        fn settings_stamp(self: &Monitor) -> f64;
-        #[qinvokable]
-        fn shared_settings(self: &Monitor) -> QString;
         /// An environment variable as rich text.
         #[qinvokable]
         fn env_html(self: &Monitor, name: &QString, value: &QString) -> QString;
@@ -294,14 +288,6 @@ impl qobject::Monitor {
 
     fn last_alive(&self) -> QString {
         QString::from(&treetop_core::settings::last_alive().to_string())
-    }
-
-    fn settings_stamp(&self) -> f64 {
-        treetop_core::settings::stamp()
-    }
-
-    fn shared_settings(&self) -> QString {
-        QString::from(&treetop_core::settings::shared_json(&treetop_core::settings::Settings::load()).to_string())
     }
 
     fn env_html(&self, name: &QString, value: &QString) -> QString {

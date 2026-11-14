@@ -149,6 +149,23 @@ impl Settings {
         self.groups.iter().find(|(g, _)| g == "General").map(|(_, v)| v)
     }
 
+    /// A key's value as written in the file (still encoded).
+    pub fn raw(&self, key: &str) -> Option<&str> {
+        self.general()?.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    /// Sets an already-encoded value.
+    pub fn set_raw(&mut self, key: &str, raw: &str) {
+        if self.general().is_none() {
+            self.groups.insert(0, ("General".into(), Vec::new()));
+        }
+        let g = &mut self.groups.iter_mut().find(|(g, _)| g == "General").unwrap().1;
+        match g.iter_mut().find(|(k, _)| k == key) {
+            Some(e) => e.1 = raw.to_string(),
+            None => g.push((key.to_string(), raw.to_string())),
+        }
+    }
+
     pub fn get(&self, key: &str) -> Option<String> {
         self.general()?.iter().find(|(k, _)| k == key).map(|(_, v)| decode(v))
     }
@@ -237,41 +254,50 @@ impl Settings {
     }
 }
 
-/// The settings both front ends share, typed as the Qt app's QML Settings
-/// holds them (bools, numbers, strings), for picking up the other app's
-/// changes. Only keys present in the file. (Not selection, scroll or root
-/// mode: those are each app's own.)
-pub fn shared_json(s: &Settings) -> serde_json::Value {
-    const BOOLS: &[&str] = &["sortDesc", "showKernel", "showResources", "showCards", "showMeters", "cpuCombined", "tintColumns", "shortenStorePaths"];
-    const NUMS: &[&str] = &["interval", "columnsVersion"];
-    const STRS: &[&str] = &["view", "sortKey", "filterText", "storeStyle", "hiddenColumns", "columnWidths", "columnOrder", "hiddenGpus", "pinnedGpus", "collapsedSections"];
-    let mut m = serde_json::Map::new();
-    for k in BOOLS {
-        if let Some(v) = s.get(k) {
-            m.insert(k.to_string(), serde_json::json!(v == "true"));
-        }
-    }
-    for k in NUMS {
-        if let Some(v) = s.get(k).and_then(|v| v.parse::<f64>().ok()) {
-            m.insert(k.to_string(), serde_json::json!(v));
-        }
-    }
-    for k in STRS {
-        if let Some(v) = s.get(k) {
-            m.insert(k.to_string(), serde_json::json!(v));
-        }
-    }
-    serde_json::Value::Object(m)
+/// A front end's private working copy of the shared settings, so changes
+/// carry over only when it exits: `begin_session` copies the shared file to
+/// `<name>.conf` (and a `<name>.base.conf` snapshot); the app reads and
+/// writes only its copy while it runs; `end_session` merges the keys it
+/// changed into the shared file. A session left by an unclean exit is
+/// merged at the next start.
+fn session_paths(name: &str) -> (PathBuf, PathBuf) {
+    let p = path();
+    (p.with_file_name(format!("{name}.conf")), p.with_file_name(format!("{name}.base.conf")))
 }
 
-/// When the settings file last changed (ms since the epoch; 0 if missing).
-pub fn stamp() -> f64 {
-    std::fs::metadata(path())
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as f64)
-        .unwrap_or(0.0)
+pub fn begin_session(name: &str) -> PathBuf {
+    end_session(name);
+    let (private, base) = session_paths(name);
+    if let Some(dir) = private.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let text = std::fs::read_to_string(path()).unwrap_or_default();
+    let _ = std::fs::write(&base, &text);
+    let _ = std::fs::write(&private, &text);
+    private
+}
+
+pub fn end_session(name: &str) {
+    let (private, base) = session_paths(name);
+    if !private.exists() {
+        let _ = std::fs::remove_file(&base);
+        return;
+    }
+    let mine = Settings::load_from(private.clone());
+    let before = Settings::load_from(base.clone());
+    let changed: Vec<(String, String)> = mine
+        .general()
+        .map(|kv| kv.iter().filter(|(k, v)| before.raw(k) != Some(v.as_str())).cloned().collect())
+        .unwrap_or_default();
+    if !changed.is_empty() {
+        let _ = update(|s| {
+            for (k, v) in &changed {
+                s.set_raw(k, v);
+            }
+        });
+    }
+    let _ = std::fs::remove_file(&private);
+    let _ = std::fs::remove_file(&base);
 }
 
 /// The window's heartbeat (kept out of the settings file, which the Qt app
@@ -330,6 +356,25 @@ maximized=false
         assert_eq!(s.f64_or("interval", 0.0), 1000.0);
         assert!(!s.bool_or("showKernel", true));
         assert_eq!(s.get("frameGeometry"), None, "only [General] is ours");
+    }
+
+    #[test]
+    fn sessions_merge_only_changes() {
+        let dir = std::env::temp_dir().join(format!("treetop-settings-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("XDG_CONFIG_HOME", &dir);
+        std::fs::create_dir_all(dir.join("treetop")).unwrap();
+        std::fs::write(path(), "[General]\nview=tree\nsortKey=cpu\n").unwrap();
+        let mine = begin_session("window");
+        // The window changes the sort; meanwhile the terminal changes the view.
+        std::fs::write(&mine, "[General]\nview=tree\nsortKey=mem\n").unwrap();
+        update(|s| s.set("view", "flat")).unwrap();
+        end_session("window");
+        let s = Settings::load();
+        assert_eq!(s.str_or("sortKey", ""), "mem", "the window's change merged");
+        assert_eq!(s.str_or("view", ""), "flat", "the terminal's change kept");
+        assert!(!mine.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
