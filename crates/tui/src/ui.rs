@@ -74,11 +74,18 @@ fn st(fg: Color) -> Style {
     Style::default().fg(fg)
 }
 
+/// Control characters (newlines and tabs inside command lines and scripts)
+/// would move the terminal's cursor: draw them as spaces.
+pub fn clean(c: char) -> char {
+    if c.is_control() { ' ' } else { c }
+}
+
 fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style, max: u16) -> u16 {
     if max == 0 {
         return 0;
     }
-    let (end, _) = buf.set_stringn(x, y, text, max as usize, style);
+    let text: String = text.chars().map(clean).collect();
+    let (end, _) = buf.set_stringn(x, y, &text, max as usize, style);
     end.saturating_sub(x)
 }
 
@@ -747,7 +754,7 @@ struct Line {
 
 impl Line {
     fn push(&mut self, t: &str, s: Style) {
-        for c in t.chars() {
+        for c in t.chars().map(clean) {
             self.cells.push((c, s));
             // Wide characters take two cells.
             if c.width().unwrap_or(1) == 2 {
@@ -1324,7 +1331,7 @@ fn details(buf: &mut Buffer, d: &mut crate::app::Details, g: &mut Geometry, area
             if *k == Kind::Plain {
                 sty = sty.fg(theme::text());
             }
-            cells.extend(t.chars().map(|c| (c, sty)));
+            cells.extend(t.chars().map(|c| (clean(c), sty)));
         }
         let shown: Vec<(char, Style)> = cells.into_iter().skip(hs).take(lw as usize).collect();
         let mut xx = list.x;

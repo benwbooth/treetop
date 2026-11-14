@@ -12,7 +12,7 @@ pub fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style, max: u16)
         return 0;
     }
     let mut n = 0u16;
-    for ch in text.chars() {
+    for ch in text.chars().map(crate::ui::clean) {
         if n >= max || x + n >= area.x + area.width {
             break;
         }
@@ -162,7 +162,7 @@ pub fn meter(buf: &mut Buffer, x: u16, y: u16, w: u16, label: &str, label_w: u16
         let (s, e) = (start.round() as u16, end.round() as u16);
         tint(buf, bx + s, y, e.saturating_sub(s), *color);
     }
-    let t: String = text.chars().take(bw as usize).collect();
+    let t: String = text.chars().map(crate::ui::clean).take(bw as usize).collect();
     let tx = bx + bw - t.chars().count() as u16;
     for (i, ch) in t.chars().enumerate() {
         let cell = &mut buf[(tx + i as u16, y)];
