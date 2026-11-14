@@ -183,8 +183,6 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
         g.hits.push((Rect::new(x, y, fw, 1), Hit::Filter));
         x += fw + 2;
     }
-    let k = if app.opts.show_kernel { "☑ Kernel threads" } else { "☐ Kernel threads" };
-    item(buf, g, &mut x, k, st(theme::text()), Hit::Act(Act::ToggleKernel));
     // Right side: root, update interval, options.
     let root = if app.root_starting { "◌ root…" } else if app.root_on { "◉ root" } else { "○ root" };
     let right = [
