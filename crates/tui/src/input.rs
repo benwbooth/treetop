@@ -41,6 +41,7 @@ fn activate(app: &mut App, level: usize, i: usize) {
 pub fn key(app: &mut App, k: KeyEvent) {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+    let alt = k.modifiers.contains(KeyModifiers::ALT);
     if ctrl && matches!(k.code, KeyCode::Char('q') | KeyCode::Char('c')) {
         app.quit = true;
         return;
@@ -169,8 +170,14 @@ pub fn key(app: &mut App, k: KeyEvent) {
             app.toggle_tag(p);
             app.move_sel(1);
         }
-        KeyCode::Right if shift => app.hscroll_by(8),
-        KeyCode::Left if shift => app.hscroll_by(-8),
+        // Sideways: Shift or Alt+←/→ (terminals often keep Shift+arrows
+        // for themselves), < and >, and plain ←/→ where nothing folds.
+        KeyCode::Right if shift || alt => app.hscroll_by(8),
+        KeyCode::Left if shift || alt => app.hscroll_by(-8),
+        KeyCode::Char('>') => app.hscroll_by(8),
+        KeyCode::Char('<') => app.hscroll_by(-8),
+        KeyCode::Right if app.arrows_scroll() => app.hscroll_by(8),
+        KeyCode::Left if app.arrows_scroll() => app.hscroll_by(-8),
         KeyCode::Right | KeyCode::Left if ctrl => {
             if let Some(key) = app.cur_row().and_then(|r| r["key"].as_str().map(String::from)) {
                 app.engine.set_subtree_expanded(&key, k.code == KeyCode::Right);
@@ -226,6 +233,20 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
         MouseEventKind::Moved => {}
         MouseEventKind::Drag(MouseButton::Left) => match &mut app.drag {
             Some(Drag::Column(_, mx)) => *mx = x,
+            Some(Drag::VBar(grab)) => {
+                if let Some((t, _, len)) = g.vbar {
+                    let start = y as i32 - t.y as i32 - *grab as i32;
+                    app.top = crate::ui::thumb_pos(t.height, len, app.page, app.rows.len(), start);
+                    app.clamp_scroll();
+                }
+            }
+            Some(Drag::HBar(grab)) => {
+                if let Some((t, _, len)) = g.hbar {
+                    let start = x as i32 - t.x as i32 - *grab as i32;
+                    let view = t.width as usize;
+                    app.hscroll = crate::ui::thumb_pos(t.width, len, view, view + app.hmax, start);
+                }
+            }
             Some(Drag::Resize(key, start, w0)) => {
                 let w = (*w0 as i64 + x as i64 - *start as i64).clamp(2, 80) as usize;
                 let key = *key;
@@ -279,7 +300,10 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
                 Some(Popup::Help(s)) => *s = (*s as i64 + d).max(0) as usize,
                 Some(Popup::Menus(stack)) => stack.last_mut().unwrap().step(d as i32),
                 None => {
-                    if shift {
+                    // Sideways with any modifier: Konsole keeps Shift+wheel
+                    // for itself, so Alt or Ctrl+wheel too.
+                    let sideways = shift || ctrl || m.modifiers.contains(KeyModifiers::ALT);
+                    if sideways || matches!(hit, Some(Hit::HBar)) {
                         app.hscroll_by(d * 10);
                     } else {
                         app.scroll(d * 6);
@@ -294,7 +318,7 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn left(app: &mut App, g: &Geometry, hit: Option<Hit>, x: u16, _y: u16, double: bool, ctrl: bool, shift: bool) {
+fn left(app: &mut App, g: &Geometry, hit: Option<Hit>, x: u16, y: u16, double: bool, ctrl: bool, shift: bool) {
     match hit {
         Some(Hit::Menu(level, i)) => activate(app, level, i),
         Some(Hit::Act(a)) => app.run(a),
@@ -304,6 +328,31 @@ fn left(app: &mut App, g: &Geometry, hit: Option<Hit>, x: u16, _y: u16, double: 
             app.run(act);
         }
         Some(Hit::Header(k)) => app.drag = Some(Drag::Column(k, x)),
+        // A scrollbar: grab the thumb, or page towards the click.
+        Some(Hit::VBar) => {
+            if let Some((t, start, len)) = g.vbar {
+                let at = y - t.y;
+                if at >= start && at < start + len {
+                    app.drag = Some(Drag::VBar(at - start));
+                } else if at < start {
+                    app.scroll(-(app.page as i64));
+                } else {
+                    app.scroll(app.page as i64);
+                }
+            }
+        }
+        Some(Hit::HBar) => {
+            if let Some((t, start, len)) = g.hbar {
+                let at = x - t.x;
+                if at >= start && at < start + len {
+                    app.drag = Some(Drag::HBar(at - start));
+                } else if at < start {
+                    app.hscroll_by(-(t.width as i64));
+                } else {
+                    app.hscroll_by(t.width as i64);
+                }
+            }
+        }
         Some(Hit::Gap(k)) => {
             if double {
                 app.fit_all_columns();

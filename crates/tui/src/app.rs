@@ -196,6 +196,9 @@ pub enum Drag {
     Column(&'static str, u16),
     /// Resizing a column: its key, the pointer's start x, the start width.
     Resize(&'static str, u16, usize),
+    /// Dragging a scrollbar's thumb: where on the thumb it was grabbed.
+    VBar(u16),
+    HBar(u16),
 }
 
 pub struct App {
@@ -213,6 +216,8 @@ pub struct App {
     /// First row shown, and how far rows are scrolled sideways.
     pub top: usize,
     pub hscroll: usize,
+    /// How far rows can scroll sideways (from the last draw).
+    pub hmax: usize,
     /// Rows the table shows, and the screen row of its first (last draw).
     pub page: usize,
     pub table_y: u16,
@@ -271,6 +276,7 @@ impl App {
             cur_pid: 0,
             top: 0,
             hscroll: 0,
+            hmax: 0,
             page: 20,
             table_y: 0,
             tagged: HashSet::new(),
@@ -589,7 +595,13 @@ impl App {
     }
 
     pub fn hscroll_by(&mut self, d: i64) {
-        self.hscroll = (self.hscroll as i64 + d).clamp(0, 2000) as usize;
+        self.hscroll = (self.hscroll as i64 + d).clamp(0, self.hmax as i64) as usize;
+    }
+
+    /// True where ←/→ don't fold anything (List and GPU views): there they
+    /// scroll sideways, as in htop.
+    pub fn arrows_scroll(&self) -> bool {
+        matches!(self.view(), "flat" | "gpu")
     }
 
     // ---- actions ----

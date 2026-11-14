@@ -31,6 +31,8 @@ pub enum Hit {
     Header(&'static str),
     Gap(&'static str),
     Table,
+    VBar,
+    HBar,
     Menu(usize, usize),
     DetailsTab(usize),
     DetailsRoot,
@@ -50,6 +52,9 @@ pub struct Geometry {
     pub header_y: u16,
     /// Where the command column starts (before scrolling).
     pub cmd_x: u16,
+    /// Scrollbars: (track, thumb start, thumb length) along the track.
+    pub vbar: Option<(Rect, u16, u16)>,
+    pub hbar: Option<(Rect, u16, u16)>,
 }
 
 impl Geometry {
@@ -79,7 +84,7 @@ pub fn draw(f: &mut Frame, app: &mut App) -> Geometry {
     let area = f.area();
     let buf = f.buffer_mut();
     fill(buf, area, theme::bg());
-    let mut g = Geometry { hits: Vec::new(), cols: Vec::new(), table: Rect::default(), header_y: 0, cmd_x: 0 };
+    let mut g = Geometry { hits: Vec::new(), cols: Vec::new(), table: Rect::default(), header_y: 0, cmd_x: 0, vbar: None, hbar: None };
     if area.height < 6 || area.width < 30 {
         put(buf, 0, 0, "treetop: the terminal is too small", st(theme::text()), area.width);
         return g;
@@ -834,13 +839,54 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
         }
     }
 
-    // Rows.
-    let body = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
+    // Rows, with a vertical scrollbar at the right and, when lines are
+    // wider than the screen, a horizontal one along the bottom.
+    let full = Rect::new(r.x, r.y + 1, r.width, r.height - 1);
+    // Widest line: the fixed columns, then tree lines, ▸, badge, Σ, command.
+    let widest = app
+        .rows
+        .iter()
+        .map(|row| {
+            let badge = row["container"].as_str().map(|c| if c.is_empty() { 0 } else { c.chars().count() + 6 }).unwrap_or(0);
+            g.cmd_x as usize + 1 + row["prefix"].as_str().map(|p| p.chars().count()).unwrap_or(0) + 2 + badge + 6
+                + row["cmdText"].as_str().map(|t| t.chars().count().min(command::MAX_ROW_COMMAND + 2)).unwrap_or(0)
+        })
+        .max()
+        .unwrap_or(0);
+    let view_w = full.width.saturating_sub(1);
+    let need_h = widest > view_w as usize && full.height > 2;
+    let body = Rect::new(full.x, full.y, view_w, full.height - need_h as u16);
+    app.hmax = widest.saturating_sub(view_w as usize);
+    app.hscroll = app.hscroll.min(app.hmax);
     g.table = body;
     app.page = body.height as usize;
     app.table_y = body.y;
     app.clamp_scroll();
     g.hits.push((body, Hit::Table));
+    let r = Rect::new(r.x, r.y, view_w, r.height);
+    let bar_track = theme::text_a(0.06);
+    let bar_thumb = theme::text_a(0.35);
+    // Vertical.
+    let track = Rect::new(view_w, body.y, 1, body.height);
+    let total = app.rows.len().max(1);
+    let (vstart, vlen) = thumb(track.height, body.height as usize, total, app.top);
+    for yy in 0..track.height {
+        let on = yy >= vstart && yy < vstart + vlen;
+        buf[(track.x, track.y + yy)].set_char(if on { '┃' } else { '│' }).set_fg(if on { bar_thumb } else { bar_track }).set_bg(theme::bg());
+    }
+    g.vbar = Some((track, vstart, vlen));
+    g.hits.push((track, Hit::VBar));
+    // Horizontal.
+    if need_h {
+        let track = Rect::new(0, body.y + body.height, view_w, 1);
+        let (hstart, hlen) = thumb(track.width, view_w as usize, widest, app.hscroll);
+        for xx in 0..track.width {
+            let on = xx >= hstart && xx < hstart + hlen;
+            buf[(track.x + xx, track.y)].set_char(if on { '━' } else { '─' }).set_fg(if on { bar_thumb } else { bar_track }).set_bg(theme::bg());
+        }
+        g.hbar = Some((track, hstart, hlen));
+        g.hits.push((track, Hit::HBar));
+    }
     let base = Rgb::hex(theme::BG);
     let alt = Rgb::hex(theme::ALT);
     let view = app.view().to_string();
@@ -996,6 +1042,27 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
             }
         }
     }
+}
+
+/// A scrollbar thumb: (start, length) on a track `len` cells long showing
+/// `view` of `total` items from `pos`.
+pub fn thumb(len: u16, view: usize, total: usize, pos: usize) -> (u16, u16) {
+    if total <= view || len == 0 {
+        return (0, len);
+    }
+    let l = ((view as f64 / total as f64 * len as f64).round() as u16).clamp(1, len);
+    let max_pos = (total - view) as f64;
+    let start = ((pos as f64 / max_pos).min(1.0) * (len - l) as f64).round() as u16;
+    (start, l)
+}
+
+/// The scroll position for a thumb dragged to `start`.
+pub fn thumb_pos(len: u16, thumb_len: u16, view: usize, total: usize, start: i32) -> usize {
+    if total <= view || len <= thumb_len {
+        return 0;
+    }
+    let f = (start.max(0) as f64 / (len - thumb_len) as f64).min(1.0);
+    (f * (total - view) as f64).round() as usize
 }
 
 // ---- footer ----

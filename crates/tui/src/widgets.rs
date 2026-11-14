@@ -46,16 +46,18 @@ pub fn tint(buf: &mut Buffer, x: u16, y: u16, w: u16, bg: Color) {
     }
 }
 
-/// A braille sparkline: 2 samples per cell across, 4 dots per row up.
-/// `mirror`: the second series grows downwards from the middle.
+/// A bar graph of recent samples, one per cell across, rising in eighth
+/// blocks. Several series overlap (the shorter drawn over the taller).
+/// `mirror`: the first series rises above the middle, the second hangs
+/// below it in half blocks (disk read/write, network down/up).
 pub fn sparkline(buf: &mut Buffer, r: Rect, series: &[(&[f64], Color)], max: Option<f64>, mirror: bool) {
     if r.width == 0 || r.height == 0 {
         return;
     }
-    let samples = r.width as usize * 2;
+    let n = r.width as usize;
     let take = |v: &[f64]| -> Vec<f64> {
-        let s = &v[v.len().saturating_sub(samples)..];
-        let mut out = vec![f64::NAN; samples - s.len()];
+        let s = &v[v.len().saturating_sub(n)..];
+        let mut out = vec![f64::NAN; n - s.len()];
         out.extend_from_slice(s);
         out
     };
@@ -66,50 +68,77 @@ pub fn sparkline(buf: &mut Buffer, r: Rect, series: &[(&[f64], Color)], max: Opt
         let m = max.unwrap_or_else(|| (peak(&a).max(peak(&b)) * 1.15).max(1.0));
         let up_rows = r.height.div_ceil(2);
         let down_rows = r.height - up_rows;
-        draw_dots(buf, Rect { height: up_rows, ..r }, &a, m, series[0].1, false);
+        bars(buf, Rect { height: up_rows, ..r }, &[(a, series[0].1)], m);
         if down_rows > 0 {
-            draw_dots(buf, Rect { y: r.y + up_rows, height: down_rows, ..r }, &b, m, series[1].1, true);
+            hang(buf, Rect { y: r.y + up_rows, height: down_rows, ..r }, &b, m, series[1].1);
         }
         return;
     }
-    for (v, color) in series {
-        let s = take(v);
-        let m = max.unwrap_or_else(|| (peak(&s) * 1.15).max(1.0));
-        draw_dots(buf, r, &s, m, *color, false);
+    let cols: Vec<(Vec<f64>, Color)> = series.iter().map(|(v, c)| (take(v), *c)).collect();
+    let m = max.unwrap_or_else(|| (cols.iter().map(|(v, _)| peak(v)).fold(0.0, f64::max) * 1.15).max(1.0));
+    bars(buf, r, &cols, m);
+}
+
+const EIGHTHS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Bars rising from the bottom of `r`.
+fn bars(buf: &mut Buffer, r: Rect, series: &[(Vec<f64>, Color)], max: f64) {
+    let rows = r.height as usize;
+    for cx in 0..r.width as usize {
+        // Heights in eighths of a cell, tallest drawn first.
+        let mut hs: Vec<(usize, Color)> = series
+            .iter()
+            .filter_map(|(v, c)| {
+                let x = v.get(cx).copied().unwrap_or(f64::NAN);
+                if !x.is_finite() || x <= 0.0 {
+                    return None;
+                }
+                let h = ((x / max).clamp(0.0, 1.0) * (rows * 8) as f64).round() as usize;
+                Some((h.max(1), *c))
+            })
+            .collect();
+        hs.sort_by(|a, b| b.0.cmp(&a.0));
+        let x = r.x + cx as u16;
+        let mut under: Vec<Option<Color>> = vec![None; rows];
+        for (h, color) in hs {
+            for row in 0..rows {
+                let from_bottom = rows - 1 - row;
+                let fill = h.saturating_sub(from_bottom * 8).min(8);
+                if fill == 0 {
+                    continue;
+                }
+                let cell = &mut buf[(x, r.y + row as u16)];
+                cell.set_char(EIGHTHS[fill]);
+                cell.set_fg(color);
+                // A shorter bar's top over a taller one's full cell.
+                if fill < 8 {
+                    if let Some(b) = under[row] {
+                        cell.set_bg(b);
+                    }
+                } else {
+                    under[row] = Some(color);
+                }
+            }
+        }
     }
 }
 
-fn draw_dots(buf: &mut Buffer, r: Rect, samples: &[f64], max: f64, color: Color, down: bool) {
+/// Bars hanging down from the top of `r`, in half blocks.
+fn hang(buf: &mut Buffer, r: Rect, v: &[f64], max: f64, color: Color) {
     let rows = r.height as usize;
-    let levels = rows * 4;
-    // Braille dot bits: left column 1,2,3,7 (top to bottom), right 4,5,6,8.
-    const LEFT: [u32; 4] = [0x01, 0x02, 0x04, 0x40];
-    const RIGHT: [u32; 4] = [0x08, 0x10, 0x20, 0x80];
-    for cx in 0..r.width as usize {
+    for (cx, x) in v.iter().enumerate().take(r.width as usize) {
+        if !x.is_finite() || *x <= 0.0 {
+            continue;
+        }
+        let h = (((x / max).clamp(0.0, 1.0) * (rows * 2) as f64).round() as usize).max(1);
         for row in 0..rows {
-            let mut bits = 0u32;
-            for (side, idx) in [(0usize, cx * 2), (1, cx * 2 + 1)] {
-                let v = samples.get(idx).copied().unwrap_or(f64::NAN);
-                if !v.is_finite() {
-                    continue;
-                }
-                let h = ((v / max).clamp(0.0, 1.0) * levels as f64).round() as usize;
-                let h = if v > 0.0 { h.max(1) } else { 0 };
-                // Dots filled in this cell row (counted from the baseline).
-                let from_base = if down { row } else { rows - 1 - row };
-                let filled = h.saturating_sub(from_base * 4).min(4);
-                for d in 0..filled {
-                    let dot = if down { d } else { 3 - d };
-                    bits |= if side == 0 { LEFT[dot] } else { RIGHT[dot] };
-                }
+            let fill = h.saturating_sub(row * 2).min(2);
+            if fill == 0 {
+                break;
             }
-            if bits != 0 {
-                let x = r.x + cx as u16;
-                let y = r.y + row as u16;
-                let cell = &mut buf[(x, y)];
-                cell.set_char(char::from_u32(0x2800 + bits).unwrap_or(' '));
-                cell.set_fg(color);
-            }
+            let cell = &mut buf[(r.x + cx as u16, r.y + row as u16)];
+            cell.set_char(if fill == 2 { '█' } else { '▀' });
+            cell.set_fg(color);
         }
     }
 }

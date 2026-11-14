@@ -179,8 +179,12 @@ folded branches, sections — is remembered for next time.
 `treetop-tui` works like the window: the same keys (press `h`), and the
 mouse too — click to select, right-click for the signal or column menu,
 double-click to focus, drag headers to move columns and column gaps to
-resize them, wheel to scroll (Shift+wheel sideways), hover for the same
-explanations as the window's tooltips. `F2` or ☰ opens the options.
+resize them, wheel to scroll, hover for the same explanations as the
+window's tooltips. `F2` or ☰ opens the options.
+
+- Sideways: Alt+←/→ or `<` `>`, Alt or Ctrl+wheel (many terminals keep
+  Shift+wheel and Shift+arrows for themselves), plain ←/→ in the List and
+  GPU views, or the scrollbar along the bottom.
 
 - It shares settings with the window (`~/.config/treetop/treetop.conf`):
   columns, widths, order, sort, filter, hidden GPUs and folded branches.

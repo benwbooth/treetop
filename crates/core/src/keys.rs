@@ -39,6 +39,8 @@ pub fn help(fe: Frontend) -> Vec<(&'static str, &'static str)> {
             v.push(("Ctrl+= / Ctrl+- / Ctrl+0", "font size"));
         }
         Frontend::Terminal => {
+            v.push(("Alt+← → / < >", "scroll sideways (Alt or Ctrl+wheel too; plain ← → in List and GPU views)"));
+            v.push(("Scrollbars", "drag the thumb, click the track to page"));
             v.push(("Esc", "clear the filter, leave focus"));
             v.push(("F10 / q / Ctrl+Q", "quit"));
             v.push(("F2", "options menu"));
