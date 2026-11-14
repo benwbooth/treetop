@@ -39,6 +39,10 @@ fn activate(app: &mut App, level: usize, i: usize) {
 }
 
 pub fn key(app: &mut App, k: KeyEvent) {
+    if app.popup.is_none() && !app.editing_filter {
+        app.last_input = Instant::now();
+        app.update_hold();
+    }
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl && matches!(k.code, KeyCode::Char('q') | KeyCode::Char('c')) {
         app.quit = true;
@@ -218,11 +222,11 @@ pub fn mouse(app: &mut App, g: &Geometry, m: MouseEvent) {
         app.mouse_moved = Instant::now();
     }
     // The order holds still while the pointer is over the list.
-    let over = in_table(g, x, y) && app.popup.is_none();
-    if over != app.frozen {
-        app.frozen = over;
-        app.engine.set_frozen(over);
+    app.over_table = in_table(g, x, y) && app.popup.is_none();
+    if !matches!(m.kind, MouseEventKind::Moved) && app.over_table {
+        app.last_input = Instant::now();
     }
+    app.update_hold();
     let hit = g.at(x, y).cloned();
     match m.kind {
         MouseEventKind::Moved => {}

@@ -1129,7 +1129,7 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 Text {
                     visible: table.frozen
-                    text: "⏸ order held while the pointer is over the list  "
+                    text: "⏸ list held still while you use it  "
                     font: win.mono
                     color: win.dimColor
                 }

@@ -54,10 +54,42 @@ impl Default for Engine {
 }
 
 /// Lays out rows and returns only the ones that differ from what the UI has.
-fn row_diff(st: &mut State) -> Value {
+///
+/// `hold`: you're using the list (pointer over it, or just scrolled or
+/// typed), so keep its rows where they are: the same rows in the same order,
+/// with their numbers updated. A process that exited stays (dimmed) where it
+/// was; new ones wait. Everything catches up when the hold ends.
+fn row_diff(st: &mut State, hold: bool) -> Value {
     let mut rows = st.procs.rows();
     for r in rows.iter_mut() {
         crate::columns::decorate(r, st.store_style);
+    }
+    if hold && !st.shown.is_empty() {
+        let mut by_key: std::collections::HashMap<String, Value> =
+            rows.into_iter().map(|r| (r["key"].as_str().unwrap_or("").to_string(), r)).collect();
+        rows = st
+            .shown
+            .iter()
+            .map(|old| {
+                let key = old["key"].as_str().unwrap_or("");
+                match by_key.remove(key) {
+                    Some(mut r) => {
+                        // Keep its place in the tree as drawn.
+                        r["prefix"] = old["prefix"].clone();
+                        r["depth"] = old["depth"].clone();
+                        r
+                    }
+                    None => {
+                        let mut r = old.clone();
+                        r["exited"] = json!(true);
+                        if let Some(c) = r["colors"].as_array_mut() {
+                            c.iter_mut().for_each(|x| *x = Value::Null);
+                        }
+                        r
+                    }
+                }
+            })
+            .collect();
     }
     let mut changed = Vec::new();
     for (i, r) in rows.iter().enumerate() {
@@ -190,7 +222,10 @@ impl Engine {
                     st.procs.save_view();
                     out["collapsedCount"] = json!(st.procs.collapsed.len());
                     if st.rows_enabled {
-                        out["rows"] = row_diff(&mut st);
+                        // Hold the rows for a sample while you use the list;
+                        // your own actions (sort, filter, fold) still apply.
+                        let hold = sampling && shared.frozen.load(Ordering::Relaxed);
+                        out["rows"] = row_diff(&mut st, hold);
                     }
                     drop(st);
                     if !on_update(out) {

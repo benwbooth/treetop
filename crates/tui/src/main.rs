@@ -111,6 +111,8 @@ fn run() -> std::io::Result<()> {
         if QUIT.load(std::sync::atomic::Ordering::SeqCst) {
             app.quit = true;
         }
+        // The hold ends a few seconds after you stop using the list.
+        app.update_hold();
         while let Ok(m) = rx.try_recv() {
             app.on_msg(m);
             redraw = true;

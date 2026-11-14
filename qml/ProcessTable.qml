@@ -35,7 +35,7 @@ FocusScope {
     function flashScrollbars() { scrollShown = true; scrollbarHide.restart() }
     Timer { id: scrollbarHide; interval: 1200; onTriggered: table.scrollShown = false }
     Timer { id: tipHold; interval: 1200 }
-    function holdTips() { tipHold.restart() }
+    function holdTips() { tipHold.restart(); touched() }
     // Restored once rows first arrive: the selection and scroll position
     // from last time.
     property string restoreKey: ""
@@ -78,7 +78,13 @@ FocusScope {
         monitor.set_store_style(effectiveStoreStyle)
         monitor.set_palette(darkBase, String(textColor))
     }
-    readonly property bool frozen: listHover.hovered
+    // The list holds still (same rows, same order) while you're using it:
+    // the pointer is over it, or you scrolled, clicked or typed in it in the
+    // last few seconds. It catches up after.
+    readonly property bool frozen: listHover.hovered || interacting.running
+    onFrozenChanged: if (monitor) monitor.set_frozen(frozen)
+    Timer { id: interacting; interval: 3000 }
+    function touched() { interacting.restart() }
     signal notice(string text)
     signal showDetails(int pid)
 
@@ -590,13 +596,10 @@ FocusScope {
             onContentXChanged: table.scrollMoved()
             // Scrollbars show for your scrolling only (wheel, touchpad, a
             // drag), not when updates keep the selected row in place.
-            onMovingChanged: if (moving) table.flashScrollbars()
-            Connections { target: ksV; function onWheel() { table.flashScrollbars() } }
-            Connections { target: ksH; function onWheel() { table.flashScrollbars() } }
-            HoverHandler {
-                id: listHover
-                onHoveredChanged: table.monitor.set_frozen(hovered)
-            }
+            onMovingChanged: if (moving) { table.flashScrollbars(); table.touched() }
+            Connections { target: ksV; function onWheel() { table.flashScrollbars(); table.touched() } }
+            Connections { target: ksH; function onWheel() { table.flashScrollbars(); table.touched() } }
+            HoverHandler { id: listHover }
             flickDeceleration: 1400
             maximumFlickVelocity: 30000
             // Scroll speed: rows per wheel notch and touchpad gain.
@@ -666,7 +669,9 @@ FocusScope {
 
                 readonly property bool current: key === table.currentKey
                 readonly property bool isTagged: !!table.tagged[pid]
-                readonly property color fg: current ? table.highlightTextColor : (kernel ? table.dimColor : table.textColor)
+                // Exited: kept in place (dimmed) while the list holds still.
+                required property bool exited
+                readonly property color fg: current ? table.highlightTextColor : (kernel || exited ? table.dimColor : table.textColor)
                 readonly property color chip: container.length > 0 && container !== "Host" ? Qt.hsla(Fmt.hue(container), 0.6, 0.55, 1) : "transparent"
                 readonly property bool showBadge: chip.a > 0
                     && (group || (table.view !== "containers" && (containerRoot || table.view === "flat" || table.view === "gpu")))
@@ -872,7 +877,7 @@ FocusScope {
                         ToolTip.text: "Collapsed: CPU, memory, GPU, disk and network on this row are totals for these " + rowItem.aggCount + " processes (this one and everything below it)."
                     }
                     Text {
-                        text: rowItem.group ? Fmt.escape(rowItem.cmdText) : rowItem.commandHtml()
+                        text: rowItem.group || rowItem.exited ? Fmt.escape(rowItem.cmdText) : rowItem.commandHtml()
                         textFormat: Text.StyledText
                         font: table.font
                         color: rowItem.group ? (rowItem.current ? table.highlightTextColor : table.dimColor) : rowItem.fg
@@ -953,6 +958,7 @@ FocusScope {
             }
 
             Keys.onPressed: (event) => {
+                table.touched()
                 const t = event.text
                 if (event.key === Qt.Key_Escape && table.dragKey) { table.dragKey = ""; event.accepted = true; return }
                 if (event.key === Qt.Key_Space) {

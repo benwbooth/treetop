@@ -231,7 +231,11 @@ pub struct App {
     pub status: Option<(String, Instant)>,
     pub editing_filter: bool,
     pub popup: Option<Popup>,
+    /// The list holds still (same rows, same order): the pointer is over it,
+    /// or you used it in the last few seconds.
     pub frozen: bool,
+    pub over_table: bool,
+    pub last_input: Instant,
     pub drag: Option<Drag>,
     pub mouse: Option<(u16, u16)>,
     pub mouse_moved: Instant,
@@ -290,6 +294,8 @@ impl App {
             editing_filter: false,
             popup: None,
             frozen: false,
+            over_table: false,
+            last_input: Instant::now() - Duration::from_secs(60),
             drag: None,
             mouse: None,
             mouse_moved: Instant::now(),
@@ -355,6 +361,15 @@ impl App {
 
     fn mark(&mut self, k: &'static str) {
         self.dirty.insert(k);
+    }
+
+    /// Hold the list while the pointer is over it or you just used it.
+    pub fn update_hold(&mut self) {
+        let hold = self.over_table || self.last_input.elapsed() < Duration::from_secs(3);
+        if hold != self.frozen {
+            self.frozen = hold;
+            self.engine.set_frozen(hold);
+        }
     }
 
     pub fn notify(&mut self, text: impl Into<String>) {

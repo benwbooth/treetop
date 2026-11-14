@@ -926,7 +926,8 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
                 _ => b,
             }
         };
-        let fg = if current { hex(theme::HIGHLIGHT_TEXT) } else if kernel { theme::dim() } else { theme::text() };
+        let exited = row["exited"].as_bool().unwrap_or(false);
+        let fg = if current { hex(theme::HIGHLIGHT_TEXT) } else if kernel || exited { theme::dim() } else { theme::text() };
         let mut line = Line { cells: Vec::new() };
         let bgc = theme::c(row_bg);
         // Tag marker.
@@ -977,7 +978,7 @@ fn table(buf: &mut Buffer, app: &mut App, g: &mut Geometry, r: Rect) {
             line.push(&format!("×{agg} "), st(hex(theme::AGG)).add_modifier(Modifier::BOLD));
         }
         let cmd_text = row["cmdText"].as_str().unwrap_or("");
-        if group {
+        if group || exited {
             line.push(cmd_text, st(theme::dim()));
         } else if current {
             let t: String = cmd_text.chars().take(command::MAX_ROW_COMMAND).collect();
@@ -1092,7 +1093,7 @@ fn footer(buf: &mut Buffer, app: &App, g: &mut Geometry, y: u16, w: u16) {
     }
     let mut right = String::new();
     if app.frozen {
-        right.push_str("‖ order held while the pointer is over the list   ");
+        right.push_str("‖ list held still while you use it   ");
     }
     if let Some(s) = app.status_text() {
         right.push_str(s);

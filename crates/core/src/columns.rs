@@ -286,6 +286,8 @@ pub fn decorate(r: &mut Value, style: StoreStyle) {
     r["colors"] = Value::Array(colors);
     r["cmd"] = command::spans_json(&command::highlight(&command, style));
     r["cmdText"] = json!(command::tidy(&command, style));
+    // Set on rows kept on screen after their process exited (see the engine).
+    r["exited"] = json!(false);
 }
 
 /// The column table as JSON (for the GUI's header and menus); `cell` is
