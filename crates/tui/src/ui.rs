@@ -162,7 +162,9 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
     put(buf, x, y, "│", st(theme::dim()), 1);
     x += 2;
     // The filter field.
-    let fw: u16 = 32.min(w.saturating_sub(x + 40));
+    // The filter takes the room up to the root toggle on the right (at
+    // most 64 wide).
+    let fw: u16 = 64.min(w.saturating_sub(x + 12));
     if fw >= 8 {
         let editing = app.editing_filter;
         let bg = if editing { theme::over_bg(theme::HIGHLIGHT, 0.25) } else { theme::track() };
