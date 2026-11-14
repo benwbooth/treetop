@@ -5,11 +5,15 @@ edition = "2021"
 license = "MIT"
 description = "An htop-style system monitor for KDE Plasma: process tree, GPU, containers, tray icon and panel widget"
 
+[workspace]
+members = [".", "crates/core", "crates/tui"]
+resolver = "2"
+
 [dependencies]
+treetop-core = { path = "crates/core" }
 cxx = "1"
 cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
-libc = "0.2"
 serde_json = "1"
 
 [build-dependencies]
@@ -17,6 +21,14 @@ cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
 
 [profile.release]
 lto = "thin"
+
+# The static terminal binary: small and quick to start.
+[profile.release-tui]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
 
 # Dev builds: our code lightly optimized, dependencies fully, so reading
 # /proc and building rows is fast even while iterating.

@@ -1,11 +1,8 @@
-//! The QML-facing `Monitor` object.
+//! The QML-facing `Monitor` object, over `treetop_core::Engine`.
 //!
-//! All sampling happens on a worker thread: it reads /proc and /sys, lays out
-//! the process rows, diffs them against what the UI already has, and posts a
-//! small JSON update to the GUI thread through `updated(json)`. The GUI
-//! thread never touches /proc and only applies changed rows, so scrolling
-//! and animations stay smooth. User actions (sort, filter, expand...) poke
-//! the worker, which re-lays out rows immediately without re-sampling.
+//! The engine samples on its own thread and hands each update here; it is
+//! posted to the GUI thread through `updated(json)`, so the GUI thread never
+//! touches /proc and only applies changed rows.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -76,351 +73,286 @@ pub mod qobject {
         fn tray_widget_present(self: &Monitor) -> bool;
         #[qinvokable]
         fn set_autostart(self: &Monitor, on: bool) -> QString;
+
+        // ---- shared presentation logic (treetop_core) ----
+        /// Colours for command lines: dark background?, text colour.
+        #[qinvokable]
+        fn set_palette(self: &Monitor, dark: bool, text: &QString);
+        /// "full", "hash" or "compact".
+        #[qinvokable]
+        fn set_store_style(self: &Monitor, style: &QString);
+        /// The column table (JSON).
+        #[qinvokable]
+        fn columns(self: &Monitor) -> QString;
+        /// A command laid out for the tooltip/details (rich text).
+        #[qinvokable]
+        fn pretty_command(self: &Monitor, command: &QString, exe: &QString) -> QString;
+        /// Every GPU with whether it's shown (JSON).
+        #[qinvokable]
+        fn gpu_state(self: &Monitor, hidden: &QString, pinned: &QString) -> QString;
+        /// Show/hide a GPU: {hidden, pinned} (comma lists) afterwards.
+        #[qinvokable]
+        fn set_gpu_shown(self: &Monitor, hidden: &QString, pinned: &QString, pdev: &QString, show: bool) -> QString;
+        /// Meter sections packed into columns (JSON).
+        #[qinvokable]
+        fn plan(self: &Monitor, width: f64, gap: f64, point_size: f64, cpu_combined: bool, collapsed: &QString, shown_gpus: i32) -> QString;
+        /// The Resources summary and each section's summary (JSON).
+        #[qinvokable]
+        fn summaries(self: &Monitor, hidden: &QString, pinned: &QString) -> QString;
+        #[qinvokable]
+        fn help_text(self: &Monitor) -> QString;
+        /// An environment variable as rich text.
+        #[qinvokable]
+        fn env_html(self: &Monitor, name: &QString, value: &QString) -> QString;
     }
 
     impl cxx_qt::Threading for Monitor {}
     impl cxx_qt::Initialize for Monitor {}
 }
 
-use crate::{actions::Actions, processes::{Processes, View}, system::System};
 use core::pin::Pin;
 use cxx_qt::Threading;
 use cxx_qt_lib::QString;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use treetop_core::command;
+use treetop_core::engine::{pid_list, Engine};
+use treetop_core::layout::{self, Histories};
 
-struct State {
-    system: System,
-    cooling: crate::cooling::Shared,
-    procs: Processes,
-    /// Rows as the UI currently has them (for diffing).
-    shown: Vec<Value>,
-    rows_enabled: bool,
-    interval: Duration,
-    /// Set by user actions: re-layout rows now, without a new sample.
-    relayout: bool,
+/// What the update thread needs to turn rows into rich text.
+struct Palette {
+    dark: bool,
+    text: String,
 }
 
-struct Shared {
-    state: Mutex<State>,
-    wake: Condvar,
-    /// Pointer over the list: keep the order (atomic so hovering never
-    /// waits on the sampler's lock).
-    frozen: AtomicBool,
-    root: Arc<Mutex<Option<crate::root::Helper>>>,
-    root_starting: AtomicBool,
+#[derive(Default)]
+struct Latest {
+    snap: Value,
+    hist: Histories,
 }
 
+/// The QML-facing object: a thin wrapper over the shared `Engine`.
 pub struct MonitorRust {
-    shared: Arc<Shared>,
-    actions: Arc<Actions>,
+    engine: Engine,
+    palette: Arc<Mutex<Palette>>,
+    latest: Arc<Mutex<Latest>>,
 }
 
 impl Default for MonitorRust {
     fn default() -> Self {
-        let root = Arc::new(Mutex::new(None));
         MonitorRust {
-            shared: Arc::new(Shared {
-                state: Mutex::new(State {
-                    system: System::new(),
-                    cooling: crate::cooling::spawn_poller(),
-                    procs: { let mut p = Processes::new(); p.load_view(); p },
-                    shown: Vec::new(),
-                    rows_enabled: true,
-                    interval: Duration::from_millis(1000),
-                    relayout: false,
-                }),
-                wake: Condvar::new(),
-                frozen: AtomicBool::new(false),
-                root: root.clone(),
-                root_starting: AtomicBool::new(false),
-            }),
-            actions: Arc::new(Actions::new(root)),
+            engine: Engine::new(),
+            palette: Arc::new(Mutex::new(Palette { dark: true, text: "#ffffff".into() })),
+            latest: Arc::new(Mutex::new(Latest::default())),
         }
     }
 }
 
-fn pid_list(s: &QString) -> Vec<i32> {
-    s.to_string().split(',').filter_map(|p| p.trim().parse().ok()).collect()
+fn list(s: &QString) -> Vec<String> {
+    s.to_string().split(',').map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect()
 }
 
-/// Lays out rows and returns only the ones that differ from what the UI has.
-fn row_diff(st: &mut State) -> Value {
-    let rows = st.procs.rows();
-    let mut changed = Vec::new();
-    for (i, r) in rows.iter().enumerate() {
-        if st.shown.get(i) != Some(r) {
-            changed.push(json!([i, r]));
-        }
-    }
-    let count = rows.len();
-    st.shown = rows;
-    json!({"count": count, "changed": changed})
+/// Rows as the QML table takes them: cells and colours as \u{1} -joined
+/// strings (one role each, cheap for ListModel), the command as rich text.
+fn for_qml(row: &mut Value, p: &Palette) {
+    let join = |v: &Value| {
+        v.as_array().map(|a| a.iter().map(|x| x.as_str().unwrap_or("")).collect::<Vec<_>>().join("\u{1}")).unwrap_or_default()
+    };
+    let cells = join(&row["cells"]);
+    let colors = join(&row["colors"]);
+    let html = command::html(&command::spans_from_json(&row["cmd"]), p.dark, &p.text);
+    let o = row.as_object_mut().unwrap();
+    o.remove("cmd");
+    o.insert("cells".into(), json!(cells));
+    o.insert("colors".into(), json!(colors));
+    o.insert("cmdHtml".into(), json!(html));
 }
 
 impl cxx_qt::Initialize for qobject::Monitor {
     fn initialize(self: Pin<&mut Self>) {
         let qt = self.qt_thread();
-        let shared = self.shared.clone();
-        let actions = self.actions.clone();
-        std::thread::Builder::new()
-            .name("treetop-sampler".into())
-            .spawn(move || {
-                let mut next = Instant::now();
-                loop {
-                    let mut st = shared.state.lock().unwrap();
-                    // Sleep until the next sample is due or a user action wakes us.
-                    while !st.relayout && Instant::now() < next {
-                        let wait = next.saturating_duration_since(Instant::now());
-                        st = shared.wake.wait_timeout(st, wait).unwrap().0;
-                    }
-                    let sampling = !(st.relayout && Instant::now() < next);
-                    if sampling {
-                        // Ask the root helper (if any) without holding the
-                        // state lock, so the UI never waits on it.
-                        drop(st);
-                        let reply = shared.root.lock().unwrap().as_mut().map(|h| h.request("sample"));
-                        st = shared.state.lock().unwrap();
-                        match reply {
-                            Some(Some(v)) => st.procs.root = Some(crate::root::RootData::from_json(&v)),
-                            Some(None) => {
-                                *shared.root.lock().unwrap() = None;
-                                st.procs.root = None;
-                                actions.notify("Root access ended".into());
-                            }
-                            None => st.procs.root = None,
-                        }
-                    }
-                    st.procs.frozen = shared.frozen.load(Ordering::Relaxed);
-                    let mut out = if !sampling {
-                        // Re-layout only (sort/filter/expand changed).
-                        json!({"rowsOnly": true})
-                    } else {
-                        next = Instant::now() + st.interval;
-                        let s = &mut *st;
-                        s.system.sample();
-                        s.procs.gpu_order = s.system.snapshot["gpus"]
-                            .as_array()
-                            .map(|a| a.iter().map(|g| g["pdev"].as_str().unwrap_or("").to_string()).collect())
-                            .unwrap_or_default();
-                        s.procs.sample(s.system.interval, s.system.mem_total);
-                        let mut out = s.system.snapshot.clone();
-                        let mut unattributed: f64 = 0.0;
-                        for (i, e) in s.procs.gpu_engine_totals().into_iter().enumerate() {
-                            // Busy the hardware reports that no process's
-                            // engine time explains (ROCm compute, a stuck
-                            // queue, or other users' work without root).
-                            let busy = out["gpus"][i]["busy"].as_f64().unwrap_or(0.0);
-                            let un = (busy - e.iter().cloned().fold(0.0, f64::max)).max(0.0);
-                            out["gpus"][i]["unattributed"] = json!(un);
-                            unattributed = unattributed.max(un);
-                            out["gpus"][i]["engines"] = json!(e);
-                        }
-                        // liquidctl fans/pumps/liquid temps: the root helper's
-                        // (sees every device) when root access is on, else ours.
-                        let cooling = match s.procs.root.as_ref().map(|r| &r.cooling) {
-                            Some(c) if !c.is_empty() => c.clone(),
-                            _ => s.cooling.lock().unwrap().clone(),
-                        };
-                        if let Some(list) = out["sensors"].as_array_mut() {
-                            list.extend(cooling);
-                            list.extend(crate::cooling::lights_out());
-                        }
-                        out["procs"] = s.procs.summary();
-                        out["top"] = s.procs.top();
-                        out["top"]["gpuUnattributed"] = json!(unattributed);
-                        let mut notices = actions.drain();
-                        if let Some(f) = s.procs.focus {
-                            if !s.procs.procs.contains_key(&f) {
-                                s.procs.focus = None;
-                                notices.push(format!("PID {f} exited; showing everything again"));
-                            }
-                        }
-                        out["notices"] = json!(notices);
-                        out["root"] = json!(s.procs.root.is_some());
-                        out["rootStarting"] = json!(shared.root_starting.load(Ordering::Relaxed));
-                        out
-                    };
-                    st.relayout = false;
-                    st.procs.save_view();
-                    out["collapsedCount"] = json!(st.procs.collapsed.len());
-                    if st.rows_enabled {
-                        out["rows"] = row_diff(&mut st);
-                    }
-                    drop(st);
-                    let text = out.to_string();
-                    if qt.queue(move |obj| obj.updated(QString::from(&text))).is_err() {
-                        break; // the QObject is gone
-                    }
+        let palette = self.palette.clone();
+        let latest = self.latest.clone();
+        self.engine.start(move |mut out| {
+            if out["rowsOnly"].is_null() {
+                let mut l = latest.lock().unwrap();
+                l.hist.push(&out);
+                let mut snap = out.clone();
+                snap.as_object_mut().unwrap().remove("rows");
+                l.snap = snap;
+            }
+            // (get_mut: indexing a missing key would insert it.)
+            if let Some(changed) = out.get_mut("rows").and_then(|r| r.get_mut("changed")).and_then(Value::as_array_mut) {
+                let p = palette.lock().unwrap();
+                for pair in changed.iter_mut() {
+                    for_qml(&mut pair[1], &p);
                 }
-            })
-            .expect("spawn sampler thread");
+            }
+            let text = out.to_string();
+            // Fails once the QObject is gone: stop sampling.
+            qt.queue(move |obj| obj.updated(QString::from(&text))).is_ok()
+        });
     }
 }
 
 impl qobject::Monitor {
-    fn with_state(&self, f: impl FnOnce(&mut State)) {
-        let mut st = self.shared.state.lock().unwrap();
-        f(&mut st);
-        st.relayout = true;
-        drop(st);
-        self.shared.wake.notify_one();
+    fn set_palette(&self, dark: bool, text: &QString) {
+        let text = text.to_string();
+        // Qt prints colours with alpha as #AARRGGBB; keep #RRGGBB.
+        let text = if text.len() == 9 { format!("#{}", &text[3..]) } else { text };
+        {
+            let mut p = self.palette.lock().unwrap();
+            if p.dark == dark && p.text == text {
+                return;
+            }
+            *p = Palette { dark, text };
+        }
+        self.engine.resend();
+    }
+
+    fn set_store_style(&self, style: &QString) {
+        self.engine.set_store_style(&style.to_string());
+    }
+
+    fn columns(&self) -> QString {
+        QString::from(&treetop_core::columns::table_json().to_string())
+    }
+
+    fn pretty_command(&self, command: &QString, exe: &QString) -> QString {
+        let p = self.palette.lock().unwrap();
+        let lines = command::pretty(&command.to_string(), &exe.to_string());
+        let html: Vec<String> = lines.iter().map(|l| command::html(l, p.dark, &p.text)).collect();
+        QString::from(&format!("<span style='white-space:pre'>{}</span>", html.join("<br>")))
+    }
+
+    fn gpu_entries(&self, hidden: &QString, pinned: &QString) -> Vec<layout::GpuEntry> {
+        let l = self.latest.lock().unwrap();
+        layout::gpus(&l.snap, &l.hist.gpu, &list(hidden), &list(pinned))
+    }
+
+    fn gpu_state(&self, hidden: &QString, pinned: &QString) -> QString {
+        let v: Vec<Value> = self
+            .gpu_entries(hidden, pinned)
+            .into_iter()
+            .map(|g| json!({"index": g.index, "number": g.number, "pdev": g.pdev, "name": g.name, "idle": g.idle, "shown": g.shown, "reason": g.reason}))
+            .collect();
+        QString::from(&json!(v).to_string())
+    }
+
+    fn set_gpu_shown(&self, hidden: &QString, pinned: &QString, pdev: &QString, show: bool) -> QString {
+        let pdev = pdev.to_string();
+        let idle = self.gpu_entries(hidden, pinned).iter().any(|g| g.pdev == pdev && g.idle);
+        let (h, p) = layout::set_gpu_shown(&list(hidden), &list(pinned), &pdev, show, idle);
+        QString::from(&json!({"hidden": h.join(","), "pinned": p.join(",")}).to_string())
+    }
+
+    fn plan(&self, width: f64, gap: f64, point_size: f64, cpu_combined: bool, collapsed: &QString, shown_gpus: i32) -> QString {
+        let l = self.latest.lock().unwrap();
+        let collapsed = list(collapsed);
+        let input = layout::PlanInput {
+            width,
+            gap,
+            min_col: 300.0,
+            core_col: 150.0,
+            chars_per_unit: 1.0 / (point_size * 0.8).max(1.0),
+            snap: &l.snap,
+            cpu_combined,
+            collapsed: &collapsed,
+            shown_gpus: shown_gpus.max(0) as usize,
+        };
+        let v = match input.plan() {
+            Some(p) => json!({"cols": p.cols, "colW": p.col_w, "coreCols": p.core_cols, "columns": p.columns}),
+            None => Value::Null,
+        };
+        QString::from(&v.to_string())
+    }
+
+    fn summaries(&self, hidden: &QString, pinned: &QString) -> QString {
+        let shown: Vec<_> = self.gpu_entries(hidden, pinned).into_iter().filter(|g| g.shown).collect();
+        let l = self.latest.lock().unwrap();
+        let mut v = json!({"summary": layout::summary(&l.snap, &shown).join("\n")});
+        for s in ["cpu", "mem", "gpu", "storage", "sensors", "system"] {
+            v[s] = json!(layout::section_summary(s, &l.snap, &shown));
+        }
+        QString::from(&v.to_string())
+    }
+
+    fn env_html(&self, name: &QString, value: &QString) -> QString {
+        let p = self.palette.lock().unwrap();
+        let lines = command::env_lines(&name.to_string(), &value.to_string());
+        QString::from(&lines.iter().map(|l| command::html(l, p.dark, &p.text)).collect::<Vec<_>>().join("<br>"))
+    }
+
+    fn help_text(&self) -> QString {
+        QString::from(&treetop_core::keys::help_text(treetop_core::keys::Frontend::Window))
     }
 
     fn set_interval(&self, ms: i32) {
-        self.with_state(|s| s.interval = Duration::from_millis(ms.clamp(100, 60_000) as u64));
+        self.engine.set_interval(ms);
     }
 
     fn set_rows_enabled(&self, enabled: bool) {
-        self.with_state(|s| s.rows_enabled = enabled);
+        self.engine.set_rows_enabled(enabled);
     }
 
     fn refresh(&self) {
-        self.with_state(|_| {});
+        self.engine.refresh();
     }
 
     fn toggle(&self, key: &QString) {
-        let key = key.to_string();
-        self.with_state(|s| {
-            if !s.procs.collapsed.remove(&key) {
-                s.procs.collapsed.insert(key);
-            }
-        });
+        self.engine.toggle(&key.to_string());
     }
 
     fn set_expanded_all(&self, expanded: bool) {
-        self.with_state(|s| {
-            let p = &mut s.procs;
-            if expanded {
-                p.collapsed.clear();
-            } else {
-                // Collapse below the top level; collapsing init would hide everything.
-                let parents: Vec<String> = p
-                    .procs
-                    .values()
-                    .filter(|x| p.procs.contains_key(&x.ppid) && x.ppid > 1)
-                    .map(|x| format!("p:{}", x.ppid))
-                    .collect();
-                p.collapsed.extend(parents);
-            }
-        });
+        self.engine.set_expanded_all(expanded);
     }
 
     fn set_subtree_expanded(&self, key: &QString, expanded: bool) {
-        let key = key.to_string();
-        self.with_state(|s| {
-            let p = &mut s.procs;
-            let Some(root) = key.strip_prefix("p:").and_then(|k| k.parse::<i32>().ok()) else {
-                // Container group rows: just that row.
-                if expanded { p.collapsed.remove(&key); } else { p.collapsed.insert(key); }
-                return;
-            };
-            let mut children: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
-            for x in p.procs.values() {
-                children.entry(x.ppid).or_default().push(x.pid);
-            }
-            let mut stack = vec![root];
-            while let Some(pid) = stack.pop() {
-                let k = format!("p:{pid}");
-                let kids = children.get(&pid).cloned().unwrap_or_default();
-                if expanded {
-                    p.collapsed.remove(&k);
-                } else if !kids.is_empty() {
-                    p.collapsed.insert(k);
-                }
-                stack.extend(kids);
-            }
-        });
+        self.engine.set_subtree_expanded(&key.to_string(), expanded);
     }
 
     fn set_view(&self, view: &QString) {
-        let v = match view.to_string().as_str() {
-            "flat" => View::Flat,
-            "containers" => View::Containers,
-            "gpu" => View::Gpu,
-            _ => View::Tree,
-        };
-        self.with_state(|s| s.procs.view = v);
+        self.engine.set_view(&view.to_string());
     }
 
     fn set_sort(&self, key: &QString, descending: bool) {
-        let key = key.to_string();
-        self.with_state(|s| {
-            s.procs.sort_key = key;
-            s.procs.sort_desc = descending;
-        });
+        self.engine.set_sort(&key.to_string(), descending);
     }
 
     fn set_filter(&self, text: &QString) {
-        let t = text.to_string();
-        self.with_state(|s| s.procs.filter = t);
+        self.engine.set_filter(&text.to_string());
     }
 
     fn set_show_kernel(&self, show: bool) {
-        self.with_state(|s| s.procs.show_kernel = show);
+        self.engine.set_show_kernel(show);
     }
 
     fn set_focus(&self, pid: i32) {
-        // Reset the row diff so the view rebuilds cleanly around the focus.
-        self.with_state(|s| s.procs.focus = (pid > 0).then_some(pid));
+        self.engine.set_focus(pid);
     }
 
     fn set_frozen(&self, frozen: bool) {
-        // No relayout needed: the next sample simply keeps the order.
-        self.shared.frozen.store(frozen, Ordering::Relaxed);
+        self.engine.set_frozen(frozen);
     }
 
     fn set_root_mode(&self, on: bool) {
-        if !on {
-            // Dropping the helper closes its stdin; it exits.
-            *self.shared.root.lock().unwrap() = None;
-            self.actions.notify("Root access off".into());
-            self.refresh();
-            return;
-        }
-        if self.shared.root.lock().unwrap().is_some() || self.shared.root_starting.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let shared = self.shared.clone();
-        let actions = self.actions.clone();
-        std::thread::spawn(move || {
-            // Blocks while polkit asks for the password.
-            match crate::root::Helper::start() {
-                Ok(h) => {
-                    *shared.root.lock().unwrap() = Some(h);
-                    actions.notify("Root access on: showing every process's I/O, GPU, paths and files".into());
-                }
-                Err(e) => actions.notify(e),
-            }
-            shared.root_starting.store(false, Ordering::SeqCst);
-            shared.state.lock().unwrap().relayout = true;
-            shared.wake.notify_one();
-        });
+        self.engine.set_root_mode(on);
     }
 
     fn inspect_as_root(&self, pid: i32) {
         let qt = self.qt_thread();
-        let root = self.shared.root.clone();
-        std::thread::spawn(move || {
-            let via_helper = root.lock().unwrap().as_mut().and_then(|h| h.request(&format!("inspect {pid}")));
-            let mut v = match via_helper {
-                Some(v) => v,
-                None => crate::root::inspect_once(pid).unwrap_or_else(|e| json!({"error": e})),
-            };
-            v["pid"] = json!(pid);
+        self.engine.inspect_as_root(pid, move |v| {
             let text = v.to_string();
             let _ = qt.queue(move |obj| obj.inspected(QString::from(&text)));
         });
     }
 
     fn send_signal(&self, pids: &QString, signal: i32) -> QString {
-        QString::from(&self.actions.send_signal(&pid_list(pids), signal))
+        QString::from(&self.engine.send_signal(&pid_list(&pids.to_string()), signal))
     }
 
     fn renice(&self, pids: &QString, nice: i32) -> QString {
-        QString::from(&self.actions.renice(&pid_list(pids), nice))
+        QString::from(&self.engine.renice(&pid_list(&pids.to_string()), nice))
     }
 
     fn tray_widget_present(&self) -> bool {
@@ -436,55 +368,10 @@ impl qobject::Monitor {
     }
 
     fn signal_list(&self) -> QString {
-        let list: Vec<_> = crate::actions::SIGNALS.iter().map(|(n, v)| json!({"name": n, "value": v})).collect();
-        QString::from(&json!(list).to_string())
+        QString::from(&self.engine.signal_list().to_string())
     }
 
     fn details(&self, pid: i32) -> QString {
-        let base = format!("/proc/{pid}");
-        let read = |f: &str| std::fs::read_to_string(format!("{base}/{f}")).unwrap_or_default();
-        let status = read("status");
-        let field = |k: &str| {
-            status.lines().find_map(|l| l.strip_prefix(k).map(|v| v.trim_start_matches(':').trim().to_string())).unwrap_or_default()
-        };
-        let cwd = std::fs::read_link(format!("{base}/cwd")).map(|p| p.display().to_string()).unwrap_or_default();
-        let exe = std::fs::read_link(format!("{base}/exe")).map(|p| p.display().to_string()).unwrap_or_default();
-        let fds = std::fs::read_dir(format!("{base}/fd")).map(|d| d.count() as i64).unwrap_or(-1);
-        let io = read("io");
-        let io_field = |k: &str| io.lines().find_map(|l| l.strip_prefix(k).and_then(|v| v.trim_start_matches(':').trim().parse::<u64>().ok()));
-        let cgroup = read("cgroup").lines().next().unwrap_or("").rsplit(':').next().unwrap_or("").to_string();
-        let mut environ = crate::inspect::environ(pid);
-        let mut files = crate::inspect::files(pid);
-        if environ.is_none() || files.is_none() {
-            // Root mode: the helper can read them without another prompt.
-            if let Some(v) = self.shared.root.lock().unwrap().as_mut().and_then(|h| h.request(&format!("inspect {pid}"))) {
-                environ = environ.or_else(|| (!v["environ"].is_null()).then(|| v["environ"].clone()));
-                files = files.or_else(|| (!v["files"].is_null()).then(|| v["files"].clone()));
-            }
-        }
-        let st = self.shared.state.lock().unwrap();
-        let p = st.procs.procs.get(&pid);
-        let container = p.and_then(|p| p.container.clone());
-        let cinfo = container.as_ref().and_then(|id| st.procs.names.lock().unwrap().get(id).cloned());
-        let v = json!({
-            "pid": pid, "name": p.map(|p| p.name.clone()), "command": p.map(|p| p.cmd.clone()),
-            "exe": exe, "cwd": cwd, "fds": fds, "cgroup": cgroup,
-            "state": field("State"), "threads": field("Threads"), "ppid": field("PPid"),
-            "uid": field("Uid"), "vmPeak": field("VmPeak"), "vmSwap": field("VmSwap"),
-            "ctxtVoluntary": field("voluntary_ctxt_switches"), "ctxtInvoluntary": field("nonvoluntary_ctxt_switches"),
-            "readBytes": io_field("read_bytes"), "writeBytes": io_field("write_bytes"),
-            "containerId": container,
-            "containerName": cinfo.as_ref().map(|c| c.name.clone()),
-            "containerImage": cinfo.as_ref().map(|c| c.image.clone()),
-            "containerStatus": cinfo.as_ref().map(|c| c.status.clone()),
-            "engine": cinfo.as_ref().map(|c| c.engine),
-            "gpus": p.map(|p| p.gpus.clone()),
-            "vram": p.map(|p| p.vram), "gtt": p.map(|p| p.gtt),
-            "gpuEngines": p.map(|p| p.gpu_engines.to_vec()),
-            // null when the kernel won't show them (other users' processes).
-            "environ": environ,
-            "files": files,
-        });
-        QString::from(&v.to_string())
+        QString::from(&self.engine.details(pid).to_string())
     }
 }

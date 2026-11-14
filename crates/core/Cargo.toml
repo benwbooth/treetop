@@ -1,0 +1,10 @@
+[package]
+name = "treetop-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "treetop's sampling engine and shared logic (no Qt): process tree, GPU, containers, sensors, root helper"
+
+[dependencies]
+libc = "0.2"
+serde_json = "1"

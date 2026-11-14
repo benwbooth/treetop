@@ -220,7 +220,8 @@ pub fn helper_main() {
     };
     serve(std::io::stdin().lock(), std::io::stdout().lock(), &mut st);
 
-    let Some(uid) = std::env::var("PKEXEC_UID").ok().and_then(|u| u.parse::<u32>().ok()) else { return };
+    // Who asked for root: polkit says PKEXEC_UID, sudo says SUDO_UID.
+    let Some(uid) = ["PKEXEC_UID", "SUDO_UID"].iter().find_map(|k| std::env::var(k).ok().and_then(|u| u.parse::<u32>().ok())) else { return };
     let path = socket_path(uid);
     let _ = std::fs::remove_file(&path);
     let Ok(listener) = std::os::unix::net::UnixListener::bind(&path) else { return };
@@ -269,6 +270,46 @@ pub fn pkexec() -> Command {
     c
 }
 
+/// How to become root: polkit (a graphical prompt), or sudo with
+/// credentials the terminal UI cached first (`sudo -v` on its terminal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Launcher {
+    Pkexec,
+    Sudo,
+}
+
+impl Launcher {
+    fn command(self) -> Command {
+        match self {
+            Launcher::Pkexec => pkexec(),
+            Launcher::Sudo => {
+                let mut c = Command::new(which_sudo());
+                // Never prompt: the password was asked for on the terminal.
+                c.arg("-n");
+                c
+            }
+        }
+    }
+
+    fn error(self, code: Option<i32>, stderr: &str) -> String {
+        match self {
+            Launcher::Pkexec => pkexec_error(code, stderr),
+            Launcher::Sudo => {
+                let msg = stderr.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("").trim();
+                if msg.is_empty() { "Root access failed".into() } else { format!("Root access failed: {msg}") }
+            }
+        }
+    }
+}
+
+/// The setuid sudo (NixOS keeps it in /run/wrappers).
+pub fn which_sudo() -> &'static str {
+    ["/run/wrappers/bin/sudo", "/usr/bin/sudo", "/bin/sudo"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or("sudo")
+}
+
 /// pkexec's own explanation, for the status line.
 pub fn pkexec_error(code: Option<i32>, stderr: &str) -> String {
     match code {
@@ -299,10 +340,14 @@ impl Helper {
     /// Reconnects to a helper still waiting from a previous run (no prompt),
     /// else starts one through pkexec (blocks while polkit asks).
     pub fn start() -> Result<Helper, String> {
+        Self::start_with(Launcher::Pkexec)
+    }
+
+    pub fn start_with(launcher: Launcher) -> Result<Helper, String> {
         if let Some(h) = Self::reconnect() {
             return Ok(h);
         }
-        Self::spawn()
+        Self::spawn(launcher)
     }
 
     fn reconnect() -> Option<Helper> {
@@ -319,15 +364,16 @@ impl Helper {
         Some(Helper { t: Transport::Socket { stream, out } })
     }
 
-    fn spawn() -> Result<Helper, String> {
-        let mut child = pkexec()
+    fn spawn(launcher: Launcher) -> Result<Helper, String> {
+        let mut child = launcher
+            .command()
             .arg(self_exe()?)
             .arg("--root-helper")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("couldn't run pkexec: {e}"))?;
+            .map_err(|e| format!("couldn't start the root helper: {e}"))?;
         let stdin = child.stdin.take().unwrap();
         let mut out = BufReader::new(child.stdout.take().unwrap());
         let mut first = String::new();
@@ -338,7 +384,7 @@ impl Helper {
                 let _ = std::io::Read::read_to_string(&mut e, &mut err);
             }
             let code = child.wait().ok().and_then(|s| s.code());
-            return Err(pkexec_error(code, &err));
+            return Err(launcher.error(code, &err));
         }
         Ok(Helper { t: Transport::Child { _child: child, stdin, out } })
     }

@@ -1,14 +1,7 @@
-mod actions;
 mod autostart;
-mod containers;
-mod cooling;
-mod gpu;
-mod root;
-mod inspect;
 mod monitor;
-mod net;
-mod processes;
-mod system;
+
+use treetop_core::root;
 
 #[cxx::bridge]
 mod ffi {

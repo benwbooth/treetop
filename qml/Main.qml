@@ -49,18 +49,11 @@ ApplicationWindow {
     // GPUs the user hid (by PCI address), and the rest with their numbers.
     readonly property var hiddenGpus: settings.hiddenGpus.split(",").filter(x => x.length > 0)
     readonly property var pinnedGpus: settings.pinnedGpus.split(",").filter(x => x.length > 0)
-    // A GPU that did nothing for the last minute (and doesn't drive a
-    // display) folds away on its own; it comes back when it gets busy.
-    function gpuIdle(i, g) {
-        if (g.display) return false
-        const h = hist.gpu[i] || []
-        if (h.length < 20) return false
-        const recent = h.slice(-60)
-        const vram = g.vramTotal > 0 ? g.vramUsed / g.vramTotal * 100 : 0
-        return Math.max(...recent) < 3 && vram < 10
-    }
-    readonly property var allGpus: snap.gpus.map((g, i) => Object.assign({ number: i + 1, index: i, idle: gpuIdle(i, g) }, g))
-    readonly property var gpus: allGpus.filter(g => hiddenGpus.indexOf(g.pdev) < 0 && (!g.idle || pinnedGpus.indexOf(g.pdev) >= 0))
+    // Which GPUs are shown (hidden by you, or idle for a minute and not
+    // driving a display) comes from the shared core.
+    readonly property var gpuState: { snap; return JSON.parse(mon.gpu_state(settings.hiddenGpus, settings.pinnedGpus)) }
+    readonly property var allGpus: gpuState.map(e => Object.assign({}, snap.gpus[e.index] || {}, e))
+    readonly property var gpus: allGpus.filter(g => g.shown)
     readonly property var collapsed: settings.collapsedSections.split(",").filter(x => x.length > 0)
     function sectionOpen(key) { return collapsed.indexOf(key) < 0 }
     function toggleSection(key) {
@@ -73,53 +66,8 @@ ApplicationWindow {
     function updatePlan() {
         const w = meterArea.width
         if (w <= 0) return
-        const nCores = snap.cpu.cores.length
-        const fsCount = (snap.disk.filesystems || []).length
-        const coreColsFor = (colW) => Math.max(1, Math.min(4, Math.floor(colW / 150)))
-        const lines = (name, colW) => {
-            switch (name) {
-            case "cpu": return settings.cpuCombined ? 2 : 1 + Math.ceil(nCores / coreColsFor(colW))
-            case "mem": return 1 + (sectionOpen("mem") ? ((snap.mem.swapTotal || 0) > 0 ? 2 : 1) : 0)
-            case "gpu": return snap.gpus.length === 0 ? 0 : 1 + (sectionOpen("gpu") ? 3 * gpus.length : 0)
-            case "storage": return 1 + (sectionOpen("storage") ? fsCount : 0)
-            case "system": return 1 + (sectionOpen("system") ? 3 : 0)
-            case "sensors": {
-                if (!(snap.sensors || []).length) return 0
-                if (!sectionOpen("sensors")) return 1
-                // Each device line, plus wrapped continuation lines.
-                const perLine = Math.max(10, Math.floor(colW / Math.max(1, mono.pointSize * 0.8)))
-                return 1 + sensorGroups.reduce((n, g) => n + Math.ceil((g.dev.length + g.items.reduce((m, x) => m + x.label.length + 7, 0)) / perLine), 0)
-            }
-            }
-            return 1
-        }
-        const names = ["cpu", "mem", "gpu", "storage", "system", "sensors"]
-            .filter(n => (n !== "gpu" || snap.gpus.length > 0) && (n !== "sensors" || (snap.sensors || []).length > 0))
-        let best = null
-        for (let cols = 1; cols <= Math.min(5, names.length); cols++) {
-            const colW = (w - meterArea.gap * (cols - 1)) / cols
-            if (cols > 1 && colW < 300) break
-            const heights = new Array(cols).fill(0)
-            const columns = []
-            for (let c = 0; c < cols; c++) columns.push([])
-            for (const n of names) {
-                let c = 0
-                for (let i = 1; i < cols; i++) if (heights[i] < heights[c]) c = i
-                columns[c].push(n)
-                heights[c] += lines(n, colW) + 0.3
-            }
-            const h = Math.max(...heights)
-            if (!best || h < best.h - 0.01) best = { h: h, cols: cols, colW: Math.floor(colW), coreCols: coreColsFor(colW), columns: columns.filter(c => c.length) }
-        }
-        if (!best) return
-        // Columns that ended up empty give their width to the rest.
-        if (best.columns.length < best.cols) {
-            best.cols = best.columns.length
-            best.colW = Math.floor((w - meterArea.gap * (best.cols - 1)) / best.cols)
-            best.coreCols = coreColsFor(best.colW)
-        }
-        const plan = { cols: best.cols, colW: best.colW, coreCols: best.coreCols, columns: best.columns }
-        if (JSON.stringify(plan) !== JSON.stringify(meterArea.plan)) meterArea.plan = plan
+        const plan = JSON.parse(mon.plan(w, meterArea.gap, mono.pointSize, settings.cpuCombined, settings.collapsedSections, gpus.length))
+        if (plan && JSON.stringify(plan) !== JSON.stringify(meterArea.plan)) meterArea.plan = plan
     }
     onGpusChanged: Qt.callLater(updatePlan)
     Connections {
@@ -139,21 +87,13 @@ ApplicationWindow {
     }
     function tempColor(t) { return t >= 80 ? cRed : (t >= 60 ? cYellow : cGreen) }
     function setGpuShown(pdev, show) {
-        if (show) {
-            settings.hiddenGpus = hiddenGpus.filter(p => p !== pdev).join(",")
-            // "Show" on an idle GPU keeps it shown even while idle.
-            const g = allGpus.find(x => x.pdev === pdev)
-            if (g && g.idle && pinnedGpus.indexOf(pdev) < 0) settings.pinnedGpus = pinnedGpus.concat([pdev]).join(",")
-        } else hideGpu(pdev)
+        const r = JSON.parse(mon.set_gpu_shown(settings.hiddenGpus, settings.pinnedGpus, pdev, show))
+        settings.hiddenGpus = r.hidden
+        settings.pinnedGpus = r.pinned
     }
     // GPUs not shown (hidden by you, or idle), each leaving a "+ show" behind.
-    readonly property var hiddenGpuList: allGpus.filter(g => gpus.indexOf(g) < 0)
-        .map(g => Object.assign({ reason: hiddenGpus.indexOf(g.pdev) >= 0 ? "hidden" : "idle" }, g))
-    function hideGpu(pdev) {
-        const h = hiddenGpus.slice(); if (h.indexOf(pdev) < 0) h.push(pdev)
-        settings.hiddenGpus = h.join(",")
-        settings.pinnedGpus = pinnedGpus.filter(p => p !== pdev).join(",")
-    }
+    readonly property var hiddenGpuList: allGpus.filter(g => !g.shown)
+    function hideGpu(pdev) { setGpuShown(pdev, false) }
     property string status: ""
     property int collapsedCount: 0
     property string view: settings.view
@@ -326,15 +266,9 @@ ApplicationWindow {
         if (tray.available || win.widgetInTray) { close.accepted = false; win.hide() }
     }
 
-    readonly property string summary: {
-        const s = snap
-        if (!s.mem || !s.mem.total) return "treetop"
-        let t = "CPU " + Fmt.pct(s.cpu.total) + " · MEM " + Fmt.pct(s.mem.used / s.mem.total * 100)
-        for (const gp of gpus) t += " · GPU" + gp.number + " " + gp.busy.toFixed(0) + "%"
-        t += "\n↓ " + Fmt.rate(s.net.rx) + "  ↑ " + Fmt.rate(s.net.tx)
-        t += "\nDisk R " + Fmt.rate(s.disk.read) + "  W " + Fmt.rate(s.disk.write)
-        return t
-    }
+    // The Resources line and each section's header summary (shared core).
+    readonly property var summaries: { snap; gpus; return JSON.parse(mon.summaries(settings.hiddenGpus, settings.pinnedGpus)) }
+    readonly property string summary: summaries.summary
 
     // The treetop widget in the Plasma tray replaces the app's own icon.
     property bool widgetInTray: false
@@ -731,8 +665,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     title: "CPU"
                     open: !settings.cpuCombined
-                    summary: Fmt.pct(win.snap.cpu.total || 0) + " · " + win.snap.cpu.cores.length + " threads"
-                        + (win.snap.cpu.temp ? " · " + win.snap.cpu.temp.toFixed(0) + "°C" : "")
+                    summary: win.summaries.cpu || ""
                     onToggled: settings.cpuCombined = !settings.cpuCombined
                 }
                 Meter {
@@ -789,8 +722,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     title: "Memory"
                     open: win.sectionOpen("mem")
-                    summary: Fmt.bytes(win.snap.mem.used) + " / " + Fmt.bytes(win.snap.mem.total)
-                        + ((win.snap.mem.swapTotal || 0) > 0 ? " · swap " + Fmt.bytes(win.snap.mem.swapUsed) : "")
+                    summary: win.summaries.mem || ""
                     onToggled: win.toggleSection("mem")
                 }
                 Meter {
@@ -828,7 +760,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     title: "GPU"
                     open: win.sectionOpen("gpu")
-                    summary: win.gpus.map(g => "GPU" + g.number + " " + g.busy.toFixed(0) + "%").join(" · ")
+                    summary: win.summaries.gpu || ""
                     // Hidden GPUs take no space; this link brings them back.
                     actionText: win.hiddenGpuList.length ? "+" + win.hiddenGpuList.length + " hidden" : ""
                     actionTip: win.hiddenGpuList.map(g => "GPU" + g.number + " (" + (g.name || "") + ") — " + g.reason).join("\n") + "\nClick to choose which GPUs to show"
@@ -888,8 +820,7 @@ ApplicationWindow {
                     title: "Storage"
                     open: win.sectionOpen("storage")
                     readonly property var fs: win.snap.disk.filesystems || []
-                    summary: Fmt.bytes(fs.reduce((a, f) => a + f.used, 0)) + " / " + Fmt.bytes(fs.reduce((a, f) => a + f.total, 0))
-                        + " · R " + Fmt.rate(win.snap.disk.read) + " W " + Fmt.rate(win.snap.disk.write)
+                    summary: win.summaries.storage || ""
                     onToggled: win.toggleSection("storage")
                 }
                 Repeater {
@@ -922,8 +853,7 @@ ApplicationWindow {
                     open: win.sectionOpen("sensors")
                     readonly property var temps: (win.snap.sensors || []).filter(x => x.kind === "temp").map(x => x.value)
                     readonly property var fans: (win.snap.sensors || []).filter(x => x.kind === "fan")
-                    summary: (temps.length ? "hottest " + Math.max(...temps).toFixed(0) + "°C" : "")
-                        + (fans.length ? " · " + fans.length + (fans.length === 1 ? " fan " : " fans ") + fans.map(f => f.value.toFixed(0)).join("/") + " rpm" : "")
+                    summary: win.summaries.sensors || ""
                     onToggled: win.toggleSection("sensors")
                 }
                 Repeater {
@@ -955,7 +885,7 @@ ApplicationWindow {
                     title: "System"
                     open: win.sectionOpen("system")
                     readonly property var p: win.snap.procs
-                    summary: (p.tasks || 0) + " tasks · load " + win.snap.load.map(v => v.toFixed(2)).join(" ")
+                    summary: win.summaries.system || ""
                     onToggled: win.toggleSection("system")
                 }
                 Text {
@@ -1310,14 +1240,7 @@ ApplicationWindow {
                             font: win.mono
                             color: win.textColor
                             // NAME=value, with PATH-like lists one entry per line.
-                            text: {
-                                const k = modelData[0], v = modelData[1]
-                                const list = v.indexOf(":") > 0 && v.split(":").length > 2 && v.indexOf("://") < 0
-                                const val = list
-                                    ? v.split(":").map(p => table.valueHtml(p)).join("<br>" + "&nbsp;".repeat(k.length + 1))
-                                    : table.valueHtml(v)
-                                return "<span style='font-family:" + win.mono.family + "'>" + table.span(table.syn.flag, k) + table.span(table.syn.eq, "=") + val + "</span>"
-                            }
+                            text: "<span style='font-family:" + win.mono.family + "'>" + mon.env_html(modelData[0], modelData[1]) + "</span>"
                         }
                     }
                 }
@@ -1370,32 +1293,7 @@ ApplicationWindow {
         modal: true
         Label {
             font: win.mono
-            text: "↑ ↓ PgUp PgDn Home End   move\n"
-                + "Space         tag process (Ctrl+click too)\n"
-                + "U             untag all\n"
-                + "+ / − / ← →   expand / collapse subtree\n"
-                + "Shift+← →     scroll sideways (Shift+wheel too)\n"
-                + "* / _         expand all / collapse all\n"
-                + "Ctrl+→ / Ctrl+←  expand / collapse everything below\n"
-                + "Click ▸/▾ (or the tree lines); Shift+click: whole subtree\n"
-                + "Enter         details\n"
-                + "f / double-click  show only this process tree (again or Esc: all)\n"
-                + "F9 / k        signal menu (right-click too)\n"
-                + "F7 / ]        nice − (higher priority)\n"
-                + "F8 / [        nice + (lower priority)\n"
-                + "F5 / t        tree ⇄ list\n"
-                + "c             group by container\n"
-                + "g             GPU view (amdgpu_top-style)\n"
-                + "1             per-core ⇄ combined CPU meter\n"
-                + "r             collapse / expand resources\n"
-                + "K             show kernel threads\n"
-                + "P / M / T     sort by CPU / memory / time\n"
-                + "F3 / /        filter\n"
-                + "Esc / F10 / q hide to tray     Ctrl+Q quit\n"
-                + "Ctrl+= / Ctrl+- / Ctrl+0      font size\n"
-                + "Right-click the header        choose columns\n\n"
-                + "Signalling someone else's process (e.g. root's)\n"
-                + "asks for authorization through polkit."
+            text: mon.help_text()
         }
     }
 }
