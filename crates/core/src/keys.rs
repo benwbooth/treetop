@@ -18,7 +18,8 @@ pub fn help(fe: Frontend) -> Vec<(&'static str, &'static str)> {
     };
     let mut v = vec![
         ("↑ ↓ PgUp PgDn Home End", "move"),
-        ("Space", "tag process (Ctrl+click too)"),
+        ("Space / Z", "hold the list still (new processes at the bottom, exited ones struck out); again to resume"),
+        ("Insert", "tag process (Ctrl+click too)"),
         ("U", "untag all"),
         fold,
         sideways,
@@ -37,7 +38,6 @@ pub fn help(fe: Frontend) -> Vec<(&'static str, &'static str)> {
         ("r", "collapse / expand resources"),
         ("K", "show kernel threads"),
         ("P / M / T", "sort by CPU / memory / time"),
-        ("Z", "hold the list still (new processes at the bottom, exited ones struck out); again to resume"),
         ("F3 / /", "filter"),
     ];
     match fe {

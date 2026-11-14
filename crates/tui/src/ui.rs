@@ -157,6 +157,8 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
         let label = if app.collapsed_count > 0 { "⊞ Expand all" } else { "⊟ Collapse all" };
         item(buf, g, &mut x, label, st(theme::text()), Hit::Act(Act::ExpandOrCollapseAll));
     }
+    let hold_style = if app.held { Style::default().bg(theme::over_bg(theme::YELLOW, 0.35)).fg(theme::text()).add_modifier(Modifier::BOLD) } else { st(theme::text()) };
+    item(buf, g, &mut x, if app.held { " ‖ Held " } else { " ‖ Hold " }, hold_style, Hit::Act(Act::ToggleHold));
     put(buf, x, y, "│", st(theme::dim()), 1);
     x += 2;
     // The filter field.
@@ -181,8 +183,6 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
         g.hits.push((Rect::new(x, y, fw, 1), Hit::Filter));
         x += fw + 2;
     }
-    let hold_style = if app.held { Style::default().bg(theme::over_bg(theme::YELLOW, 0.35)).fg(theme::text()).add_modifier(Modifier::BOLD) } else { st(theme::text()) };
-    item(buf, g, &mut x, if app.held { " ‖ Held " } else { " ‖ Hold " }, hold_style, Hit::Act(Act::ToggleHold));
     let k = if app.opts.show_kernel { "☑ Kernel threads" } else { "☐ Kernel threads" };
     item(buf, g, &mut x, k, st(theme::text()), Hit::Act(Act::ToggleKernel));
     // Right side: root, update interval, options.
@@ -1097,7 +1097,7 @@ fn footer(buf: &mut Buffer, app: &App, g: &mut Geometry, y: u16, w: u16) {
     }
     let mut right = String::new();
     if app.held {
-        right.push_str("‖ held · Z resumes   ");
+        right.push_str("‖ held · Space resumes   ");
     }
     if let Some(s) = app.status_text() {
         right.push_str(s);

@@ -164,7 +164,8 @@ folded branches, sections — is remembered for next time.
 | `f` or double-click | focus on this process's tree (`Esc` to return) |
 | `F9` or `k` | signal menu (also right-click) |
 | `F7` / `F8` | nice − / + |
-| `Space` | tag a process (Ctrl+click too) |
+| `Space` or `Z` | hold the list still (new processes join at the bottom, exited ones are struck out); again to resume |
+| `Insert` | tag a process (Ctrl+click too) |
 | `t` / `F5` | tree ⇄ list |
 | `c` | containers view |
 | `g` | GPU view |

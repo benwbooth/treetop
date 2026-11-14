@@ -998,7 +998,7 @@ impl App {
             Act::ToggleHold => {
                 self.held = !self.held;
                 self.engine.set_held(self.held);
-                self.notify(if self.held { "Holding the list: new processes join at the bottom, exited ones are struck out (Z resumes)" } else { "Live again" });
+                self.notify(if self.held { "Holding the list: new processes join at the bottom, exited ones are struck out (Space resumes)" } else { "Live again" });
             }
             Act::Help => self.popup = Some(Popup::Help(0)),
             Act::Quit => self.quit = true,

@@ -963,7 +963,8 @@ FocusScope {
                 table.touched()
                 const t = event.text
                 if (event.key === Qt.Key_Escape && table.dragKey) { table.dragKey = ""; event.accepted = true; return }
-                if (event.key === Qt.Key_Space) {
+                // Insert tags (Space holds the list: see letterKey).
+                if (event.key === Qt.Key_Insert) {
                     if (table.currentPid > 0) {
                         const tg = Object.assign({}, table.tagged)
                         if (tg[table.currentPid]) delete tg[table.currentPid]; else tg[table.currentPid] = true

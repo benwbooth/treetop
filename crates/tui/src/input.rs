@@ -170,7 +170,9 @@ pub fn key(app: &mut App, k: KeyEvent) {
             }
         }
         // The process list.
-        KeyCode::Char(' ') => {
+        // Space holds the list still; Insert tags (htop's other tag key).
+        KeyCode::Char(' ') => app.run(Act::ToggleHold),
+        KeyCode::Insert => {
             let p = app.cur_pid;
             app.toggle_tag(p);
             app.move_sel(1);
