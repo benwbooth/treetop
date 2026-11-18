@@ -198,6 +198,10 @@ impl Engine {
                             .as_array()
                             .map(|a| a.iter().map(|g| g["pdev"].as_str().unwrap_or("").to_string()).collect())
                             .unwrap_or_default();
+                        s.procs.gpu_busy = s.system.snapshot["gpus"]
+                            .as_array()
+                            .map(|a| a.iter().map(|g| g["busy"].as_f64().unwrap_or(0.0)).collect())
+                            .unwrap_or_default();
                         s.procs.sample(s.system.interval, s.system.mem_total);
                         let mut out = s.system.snapshot.clone();
                         let mut unattributed: f64 = 0.0;
@@ -210,6 +214,8 @@ impl Engine {
                             out["gpus"][i]["unattributed"] = json!(un);
                             unattributed = unattributed.max(un);
                             out["gpus"][i]["engines"] = json!(e);
+                            let pdev = out["gpus"][i]["pdev"].as_str().unwrap_or("").to_string();
+                            out["gpus"][i]["rocm"] = s.procs.rocm_on(&pdev);
                         }
                         // liquidctl fans/pumps/liquid temps: the root helper's
                         // (sees every device) when root access is on, else ours.

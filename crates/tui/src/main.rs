@@ -58,6 +58,12 @@ fn self_test() -> i32 {
         println!("{l}");
     }
     println!("{} processes in {} rows", last["procs"]["tasks"], last["rows"]["count"]);
+    if std::env::var_os("TREETOP_DEBUG_TOP").is_some() {
+        println!("{}", last["top"]);
+        for g in last["gpus"].as_array().into_iter().flatten() {
+            println!("{} busy {} unattributed {} rocm {}", g["pdev"], g["busy"], g["unattributed"], g["rocm"]);
+        }
+    }
     if last["rows"]["count"].as_u64().unwrap_or(0) == 0 {
         return 1;
     }

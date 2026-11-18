@@ -185,7 +185,7 @@ folded branches, sections — is remembered for next time.
 mouse too — click to select, right-click for the signal or column menu,
 double-click to focus, drag headers to move columns and column gaps to
 resize them, wheel to scroll, hover for the same explanations as the
-window's tooltips. `F2` or ☰ opens the options.
+window's tooltips. `F2` or ≡ opens the options.
 
 - Sideways: ←/→ (as in htop; `+`/`−` fold instead), `<` `>`, Alt or
   Ctrl+wheel (many terminals keep Shift+wheel for themselves), or the

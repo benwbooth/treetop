@@ -143,7 +143,7 @@ ApplicationWindow {
     // Hold: the list keeps its rows (new processes at the bottom, exited
     // ones struck out) until you release it. Z or the toolbar button.
     property bool held: false
-    onHeldChanged: { mon.set_held(held); showStatus(held ? "Holding the list: new processes join at the bottom, exited ones are struck out (Space resumes)" : "Live again") }
+    onHeldChanged: { mon.set_held(held); showStatus(held ? "Held: new processes go at the bottom, exited ones are struck out (Space resumes)" : "Live again") }
     property bool booted: false
     property bool autostart: false
     onVisibleChanged: {
@@ -202,7 +202,7 @@ ApplicationWindow {
         status = text
         statusTimer.restart()
     }
-    Timer { id: statusTimer; interval: 6000; onTriggered: win.status = "" }
+    Timer { id: statusTimer; interval: 6000; onTriggered: if (!statusHover.hovered) win.status = "" }
     // Scroll position and selection, saved shortly after they settle.
     Timer {
         id: viewSave
@@ -1166,11 +1166,20 @@ ApplicationWindow {
                     color: win.dimColor
                 }
                 Text {
+                    id: statusLine
                     text: win.status
                     font: win.mono
                     color: win.cYellow
                     elide: Text.ElideLeft
                     Layout.maximumWidth: win.width * 0.45
+                    // Cut short: hovering shows it all (and keeps it up).
+                    HoverHandler {
+                        id: statusHover
+                        onHoveredChanged: if (hovered) statusTimer.stop(); else if (win.status !== "") statusTimer.restart()
+                    }
+                    ToolTip.text: win.status
+                    ToolTip.visible: statusHover.hovered && tips.armed && statusLine.truncated
+                    ToolTip.delay: 300
                 }
             }
         }

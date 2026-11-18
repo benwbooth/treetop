@@ -81,6 +81,9 @@ pub enum Kind {
     Space,
     /// Line continuations in the pretty layout.
     Faint,
+    /// A /nix/store entry's package name and version, gently picked out.
+    StoreName,
+    StoreVersion,
 }
 
 impl Kind {
@@ -106,6 +109,10 @@ impl Kind {
             (Number, false) => (Some("#86379f"), 1.0),
             (Url, true) => (Some("#e8995a"), 1.0),
             (Url, false) => (Some("#a8541a"), 1.0),
+            (StoreName, true) => (Some("#93c2b0"), 1.0),
+            (StoreName, false) => (Some("#2f7562"), 1.0),
+            (StoreVersion, true) => (Some("#c4ab84"), 1.0),
+            (StoreVersion, false) => (Some("#86663a"), 1.0),
             (Plain | Space, _) => (None, 1.0),
         }
     }
@@ -127,6 +134,8 @@ impl Kind {
             Plain => "plain",
             Space => "space",
             Faint => "faint",
+            StoreName => "storename",
+            StoreVersion => "storeversion",
         }
     }
     pub fn from_name(s: &str) -> Kind {
@@ -143,6 +152,8 @@ impl Kind {
             "url" => Url,
             "space" => Space,
             "faint" => Faint,
+            "storename" => StoreName,
+            "storeversion" => StoreVersion,
             _ => Plain,
         }
     }
@@ -196,13 +207,70 @@ fn push(out: &mut Spans, k: Kind, t: &str) {
     }
 }
 
+/// Where each /nix/store entry's "name-version" sits in `s` (byte ranges),
+/// for full or shortened (tidy) paths.
+fn store_entries(s: &str) -> Vec<(usize, usize)> {
+    let b = s.as_bytes();
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < s.len() {
+        let rest = &s[i..];
+        let Some(p) = ["/nix/store/", "/n…/s…/"].iter().find(|p| rest.starts_with(**p)) else {
+            i += rest.chars().next().map_or(1, char::len_utf8);
+            continue;
+        };
+        let h = i + p.len();
+        let hash_end = if h + 33 <= b.len() && b[h..h + 32].iter().all(|&c| nix32(c)) && b[h + 32] == b'-' {
+            Some(h + 33)
+        } else if s[h..].len() >= 9 && b[h..h + 5].iter().all(|&c| nix32(c)) && s[h + 5..].starts_with("…-") {
+            Some(h + 5 + "…-".len())
+        } else {
+            None
+        };
+        match hash_end {
+            Some(start) => {
+                let end = s[start..].find(['/', ':', ' ']).map_or(s.len(), |e| start + e);
+                if end > start {
+                    found.push((start, end));
+                }
+                i = end;
+            }
+            None => i = h,
+        }
+    }
+    found
+}
+
+/// Spans of `kind`, with any store entry's name and version picked out.
+/// The version starts at the first "-" followed by a digit, as Nix has it.
+fn store(out: &mut Spans, kind: Kind, s: &str) {
+    let mut last = 0;
+    for (a, z) in store_entries(s) {
+        push(out, kind, &s[last..a]);
+        let e = &s[a..z];
+        let v = e.as_bytes().windows(2).position(|w| w[0] == b'-' && w[1].is_ascii_digit()).filter(|&v| v > 0);
+        match v {
+            Some(v) => {
+                push(out, Kind::StoreName, &e[..v]);
+                push(out, kind, "-");
+                push(out, Kind::StoreVersion, &e[v + 1..]);
+            }
+            None => push(out, Kind::StoreName, e),
+        }
+        last = z;
+    }
+    push(out, kind, &s[last..]);
+}
+
 fn path(out: &mut Spans, tok: &str) {
+    // A path that is itself a store entry: its name is the leaf.
+    let entry_last = store_entries(tok).last().is_some_and(|&(_, z)| z == tok.len());
     match tok.rfind('/') {
-        Some(i) if i + 1 < tok.len() => {
-            push(out, Kind::Path, &tok[..=i]);
+        Some(i) if i + 1 < tok.len() && !entry_last => {
+            store(out, Kind::Path, &tok[..=i]);
             push(out, Kind::Leaf, &tok[i + 1..]);
         }
-        _ => push(out, Kind::Path, tok),
+        _ => store(out, Kind::Path, tok),
     }
 }
 
@@ -296,7 +364,7 @@ pub fn highlight(command: &str, style: StoreStyle) -> Spans {
     }
     let prog = parts.first().copied().unwrap_or("");
     let slash = prog.rfind('/').map(|i| i + 1).unwrap_or(0);
-    push(&mut out, Kind::Dir, &prog[..slash]);
+    store(&mut out, Kind::Dir, &prog[..slash]);
     push(&mut out, Kind::Prog, &prog[slash..]);
     for p in parts.iter().skip(1) {
         if p.chars().all(|c| c == ' ') {
@@ -322,7 +390,7 @@ pub fn pretty(command: &str, exe: &str) -> Vec<Spans> {
     let prog = if path.is_empty() { toks[0] } else { path };
     let slash = prog.rfind('/').map(|i| i + 1).unwrap_or(0);
     let mut first = Spans::new();
-    push(&mut first, Kind::Dir, &prog[..slash]);
+    store(&mut first, Kind::Dir, &prog[..slash]);
     push(&mut first, Kind::Prog, &prog[slash..]);
     if guessed {
         push(&mut first, Kind::Dir, "  (? found on PATH; the real binary isn't readable without root)");
@@ -411,6 +479,24 @@ mod tests {
             (Kind::Url, "http://a"), (Kind::Dir, "[kworker]"),
         ]);
         assert_eq!(text(&s), "/usr/bin/python3 -u --port=9090 FOO=bar /srv/x.py 42 http://a [kworker]");
+    }
+
+    #[test]
+    fn store_names() {
+        let k = |c: &str, st| -> Vec<(Kind, String)> { highlight(c, st).into_iter().filter(|(k, _)| *k != Kind::Space).collect() };
+        let c = "/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/bin/systemd-run --x /nix/store/zsd35lbngm1hnknnbwa3nsfhw80sf03w-whisper.py";
+        let s = |k: Kind, t: &str| (k, t.to_string());
+        assert_eq!(k(c, StoreStyle::Compact), vec![
+            s(Kind::Dir, "/n…/s…/y3fqx…-"), s(Kind::StoreName, "systemd"), s(Kind::Dir, "-"),
+            s(Kind::StoreVersion, "260.5"), s(Kind::Dir, "/bin/"), s(Kind::Prog, "systemd-run"),
+            s(Kind::Flag, "--x"), s(Kind::Path, "/n…/s…/zsd35…-"), s(Kind::StoreName, "whisper.py"),
+        ]);
+        let f = k(c, StoreStyle::Full);
+        assert_eq!(f[1], s(Kind::StoreName, "systemd"));
+        assert_eq!(f[3], s(Kind::StoreVersion, "260.5"));
+        // Not a store path: untouched.
+        assert_eq!(k("/usr/lib/foo-1.2/x", StoreStyle::Full)[0], s(Kind::Dir, "/usr/lib/foo-1.2/"));
+        assert_eq!(text(&highlight(c, StoreStyle::Hash)), tidy(c, StoreStyle::Hash));
     }
 
     #[test]

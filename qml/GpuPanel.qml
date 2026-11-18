@@ -104,6 +104,26 @@ Rectangle {
                         HoverHandler { id: eh }
                     }
                 }
+                // ROCm programs on this GPU, with their estimated share of
+                // its busy time (the kernel doesn't time ROCm work).
+                Repeater {
+                    model: panel.gpu.rocm || []
+                    Meter {
+                        Layout.fillWidth: true; font: panel.font; textColor: panel.textColor; trackColor: panel.trackColor
+                        label: modelData.name; labelWidth: 8 * panel.font.pointSize
+                        segments: [{ value: modelData.pct || 0, color: "#e8a050" }]
+                        text: "ROCm · " + modelData.user + " · " + Fmt.bytes(modelData.vram) + " · " + (modelData.idle ? (modelData.guess ? "idle? " : "idle ") : "") + (modelData.pct || 0).toFixed(0) + "%"
+                        ToolTip.text: modelData.name + " (PID " + modelData.pid + ", " + modelData.user + ") holds ROCm compute queues on this GPU. "
+                            + "The kernel doesn't time ROCm work per program, so its share is an estimate: the GPU's busy time that timed work "
+                            + "doesn't explain, split by how often each program's waves were on the GPU."
+                            + (modelData.idle ? "\n\nRight now none of its compute work is running, yet the GPU stays busy (and at full clock) since its last work: "
+                                + "ROCm queues left waiting, as llama.cpp/ollama does while a model stays loaded. Unloading the model (ollama stop) frees the GPU."
+                                + (modelData.guess ? " treetop hasn't seen which program ran work last, so this goes to the newest program holding queues — a guess until it sees one at work." : "") : "")
+                        ToolTip.visible: rh.hovered && tipGate.armed
+                        ToolTip.delay: 600
+                        HoverHandler { id: rh }
+                    }
+                }
                 // Busy the hardware reports that no process explains.
                 Text {
                     Layout.fillWidth: true
@@ -112,7 +132,9 @@ Rectangle {
                     font: panel.font
                     color: panel.warnColor
                     text: "⚠ " + (panel.gpu.unattributed || 0).toFixed(0) + "% of the busy time isn't from any process treetop can see: "
-                        + "ROCm compute work (processes marked ROCm in the engines column), "
+                        + ((panel.gpu.rocm || []).length
+                            ? "none of the ROCm programs here (" + panel.gpu.rocm.map(x => x.name).join(", ") + ") had work on the GPU when sampled, so "
+                            : "")
                         + "other users' processes without root access, or a stuck GPU job."
                 }
                 Meter {

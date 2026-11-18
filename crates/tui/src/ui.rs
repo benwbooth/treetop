@@ -137,12 +137,15 @@ pub fn draw(f: &mut Frame, app: &mut App) -> Geometry {
 fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
     let y = 0;
     let mut x = 1;
-    let item = |buf: &mut Buffer, g: &mut Geometry, x: &mut u16, text: &str, style: Style, hit: Hit| {
+    // Each button explains itself on hover, as in the window (the tip
+    // goes under the click so both work).
+    let item = |buf: &mut Buffer, g: &mut Geometry, x: &mut u16, text: &str, style: Style, hit: Hit, tip: &str| {
         let n = put(buf, *x, y, text, style, w.saturating_sub(*x));
+        g.hits.push((Rect::new(*x, y, n, 1), Hit::Tip(tip.into())));
         g.hits.push((Rect::new(*x, y, n, 1), hit));
         *x += n + 1;
     };
-    item(buf, g, &mut x, "☰", st(theme::text()).add_modifier(Modifier::BOLD), Hit::Act(Act::Options));
+    item(buf, g, &mut x, "≡", st(theme::text()).add_modifier(Modifier::BOLD), Hit::Act(Act::Options), "Options");
     let vname = match app.view() {
         "flat" => "List",
         "containers" => "Containers",
@@ -150,15 +153,24 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
         _ => "Tree",
     };
     let style = Style::default().bg(theme::over_bg(theme::HIGHLIGHT, 0.25)).fg(theme::text()).add_modifier(Modifier::BOLD);
-    item(buf, g, &mut x, &format!(" {vname} ▾ "), style, Hit::Act(Act::ChooseView));
+    item(buf, g, &mut x, &format!(" {vname} ▾ "), style, Hit::Act(Act::ChooseView), "View: the process tree, a flat list, grouped by container, or the GPU view");
     if matches!(app.view(), "tree" | "containers") {
         put(buf, x, y, "│", st(theme::dim()), 1);
         x += 2;
-        let label = if app.collapsed_count > 0 { "⊞ Expand all" } else { "⊟ Collapse all" };
-        item(buf, g, &mut x, label, st(theme::text()), Hit::Act(Act::ExpandOrCollapseAll));
+        let (label, tip) = if app.collapsed_count > 0 {
+            ("⊞ Expand all", "Expand every branch of the tree (*)")
+        } else {
+            ("⊟ Collapse all", "Collapse the tree to its top-level processes (_)")
+        };
+        item(buf, g, &mut x, label, st(theme::text()), Hit::Act(Act::ExpandOrCollapseAll), tip);
     }
     let hold_style = if app.held { Style::default().bg(theme::over_bg(theme::YELLOW, 0.35)).fg(theme::text()).add_modifier(Modifier::BOLD) } else { st(theme::text()) };
-    item(buf, g, &mut x, if app.held { " ‖ Held " } else { " ‖ Hold " }, hold_style, Hit::Act(Act::ToggleHold));
+    let hold_tip = if app.held {
+        "Holding: the list keeps its rows; new processes join at the bottom and exited ones are struck out. Click (or Space) to go live."
+    } else {
+        "Hold the list still: no rows move; new processes join at the bottom, exited ones are struck out (Space)"
+    };
+    item(buf, g, &mut x, if app.held { " ‖ Held " } else { " ‖ Hold " }, hold_style, Hit::Act(Act::ToggleHold), hold_tip);
     put(buf, x, y, "│", st(theme::dim()), 1);
     x += 2;
     // The filter field.
@@ -198,7 +210,11 @@ fn toolbar(buf: &mut Buffer, app: &App, g: &mut Geometry, w: u16) {
         rx += n + 2;
     }
     // The root toggle explains itself on hover.
-    let tip = "Root access: shows every process's disk I/O, GPU use, network traffic, environment and open files, and lets you signal and renice anyone's processes. Asks once (polkit, or sudo in a terminal without it).";
+    let tip = if app.root_on {
+        "Root access is on: every process's disk I/O, GPU use, executable path, environment and open files are visible, and signals to root's processes need no further prompts. Click to turn off."
+    } else {
+        "Root access is off: other users' (e.g. root's) disk I/O, GPU use, paths, environment and files are hidden by the kernel. Click to turn it on (asks once: polkit, or sudo in a terminal without it)."
+    };
     if let Some((r, _)) = g.hits.iter().find(|(_, h)| *h == Hit::Act(Act::ToggleRoot)).cloned() {
         g.hits.push((r, Hit::Tip(tip.into())));
         g.hits.push((r, Hit::Act(Act::ToggleRoot)));
@@ -614,6 +630,9 @@ fn meters(buf: &mut Buffer, app: &App, g: &mut Geometry, r: Rect) -> u16 {
 
 // ---- GPU view ----
 
+const IDLE_TIP: &str = "\n\nRight now none of its compute work is running, yet the GPU stays busy (and at full clock) since its last work: ROCm queues left waiting, as llama.cpp/ollama does while a model stays loaded. Unloading the model (ollama stop) frees the GPU.";
+const IDLE_GUESS_TIP: &str = "\n\nRight now no compute work is running, yet the GPU stays busy (and at full clock): ROCm queues left waiting, as llama.cpp/ollama does while a model stays loaded. treetop hasn't seen which program ran work last, so this goes to the newest program holding queues — a guess until it sees one at work.";
+
 fn gpu_panels(buf: &mut Buffer, app: &App, g: &mut Geometry, r: Rect) -> u16 {
     let s = &app.snap;
     let mut y = r.y;
@@ -658,11 +677,29 @@ fn gpu_panels(buf: &mut Buffer, app: &App, g: &mut Geometry, r: Rect) -> u16 {
             let shade = Rgb::hex(theme::MAGENTA).lighter(1.0 + i as f64 * 0.12);
             m(buf, &mut ly, name, &[(val, theme::c(shade))], 100.0, &format!("{}%", format::fixed(val, 0)));
         }
+        // ROCm programs: their share of the busy time is estimated (the
+        // kernel doesn't time their work).
+        let rocm = gp["rocm"].as_array().cloned().unwrap_or_default();
+        for x in rocm.iter().take(4) {
+            if ly >= bottom {
+                break;
+            }
+            let pct = n(&x["pct"]);
+            let name = x["name"].as_str().unwrap_or("");
+            let idle = x["idle"].as_bool().unwrap_or(false);
+            m(buf, &mut ly, name, &[(pct, hex(theme::ORANGE))], 100.0, &format!("ROCm {} {} {}{}%", x["user"].as_str().unwrap_or(""), bytes(n(&x["vram"])), if !idle { "" } else if x["guess"].as_bool().unwrap_or(false) { "idle? " } else { "idle " }, format::fixed(pct, 0)));
+            g.hits.push((Rect::new(r.x, ly - 1, lw, 1), Hit::Tip(format!("{} (PID {}, {}, {} VRAM) holds ROCm compute queues on this GPU. The kernel doesn't time ROCm work per program, so this is an estimate: the GPU's busy time that timed work doesn't explain, split by how often each program's waves were on the GPU.{}", name, x["pid"], x["user"].as_str().unwrap_or(""), bytes(n(&x["vram"])), if !idle { "" } else if x["guess"].as_bool().unwrap_or(false) { IDLE_GUESS_TIP } else { IDLE_TIP }))));
+        }
         let un = n(&gp["unattributed"]);
         if un >= 20.0 && ly < bottom {
             let t = format!("⚠ {}% of the busy time isn't from any process treetop can see", format::fixed(un, 0));
             put(buf, r.x, ly, &t, st(hex(theme::RED)), lw + kw);
-            g.hits.push((Rect::new(r.x, ly, lw, 1), Hit::Tip("ROCm compute work (processes marked ROCm in the engines column), other users' processes without root access, or a stuck GPU job.".into())));
+            let tip = if rocm.is_empty() {
+                "Other users' processes without root access, or a stuck GPU job.".to_string()
+            } else {
+                format!("None of the ROCm programs here ({}) had work on the GPU when sampled: other users' processes without root access, or a stuck GPU job.", rocm.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>().join(", "))
+            };
+            g.hits.push((Rect::new(r.x, ly, lw, 1), Hit::Tip(tip)));
             ly += 1;
         }
         m(buf, &mut ly, "VRAM", &[(n(&gp["vramUsed"]), hex(theme::PINK))], n(&gp["vramTotal"]).max(1.0), &format!("{}/{}", bytes(n(&gp["vramUsed"])), bytes(n(&gp["vramTotal"]))));
@@ -1107,10 +1144,18 @@ fn footer(buf: &mut Buffer, app: &App, g: &mut Geometry, y: u16, w: u16) {
     if !right.is_empty() {
         let max = (w.saturating_sub(x + 1)) as usize;
         let n1 = right.chars().count();
+        let full = right.replacen("   ", "\n", 1).trim().to_string();
         // Left-elided: the end of a message matters most.
         let t: String = if n1 > max { std::iter::once('…').chain(right.chars().skip(n1 - max + 1)).collect() } else { right };
         let tw = t.chars().count() as u16;
         put(buf, w - tw, y, &t, st(hex(theme::YELLOW)).bg(hex(theme::FOOTER_BG)), tw);
+        app.status_rect.set(Some((w - tw, y, tw)));
+        // Cut off: the whole message on hover.
+        if n1 > max {
+            g.hits.push((Rect::new(w - tw, y, tw, 1), Hit::Tip(full)));
+        }
+    } else {
+        app.status_rect.set(None);
     }
 }
 

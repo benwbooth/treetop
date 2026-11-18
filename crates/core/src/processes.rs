@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 struct Static {
@@ -73,6 +74,9 @@ pub struct Proc {
     pub gpus: String,
     /// ROCm compute queues held (amdkfd), whose work fdinfo can't see.
     pub compute_queues: u32,
+    /// Its GPU share is busy time with no compute work (idle queues).
+    pub compute_idle: bool,
+    pub compute_guess: bool,
     /// Disk read/write in bytes/s from /proc/<pid>/io; -1 when unreadable
     /// (other users' processes without root).
     pub io_r: f64,
@@ -98,6 +102,7 @@ pub struct Processes {
     gpu_uses_cached: HashMap<i32, Vec<gpu::GpuUse>>,
     pub cnet: HashMap<String, (f64, f64)>,
     users: HashMap<u32, String>,
+    users_at: Instant,
     clk_tck: f64,
     page: u64,
     pub procs: HashMap<i32, Proc>,
@@ -111,6 +116,12 @@ pub struct Processes {
     pub gpu: gpu::Shared,
     /// PCI addresses of the GPUs in display order (GPU1, GPU2, ...).
     pub gpu_order: Vec<String>,
+    /// Each GPU's busy % as the hardware reports it (gpu_order), set before
+    /// sample(): what ROCm work gets its estimate from.
+    pub gpu_busy: Vec<f64>,
+    /// Per GPU, the ROCm process last seen with compute waves on it, as
+    /// (pid, start time): kept in a file so a restarted treetop still knows.
+    rocm_last: HashMap<String, (i32, u64)>,
     /// While set (pointer over the list), sibling order is kept exactly.
     pub frozen: bool,
     /// Focus mode: only this process and its descendants are shown.
@@ -190,7 +201,51 @@ fn load_users() -> HashMap<u32, String> {
             }
         }
     }
+    // systemd DynamicUser= services (ollama, earlyoom, …) have no passwd
+    // entry; systemd's user database names them.
+    for (uid, name) in dynamic_users() {
+        m.entry(uid).or_insert(name);
+    }
     m
+}
+
+/// Users systemd allocates for DynamicUser= units, from its userdb varlink
+/// socket (readable by anyone).
+fn dynamic_users() -> Vec<(u32, String)> {
+    use std::io::{Read, Write};
+    let mut out = Vec::new();
+    let Ok(mut s) = std::os::unix::net::UnixStream::connect("/run/systemd/userdb/io.systemd.DynamicUser") else { return out };
+    let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
+    let req = br#"{"method":"io.systemd.UserDatabase.GetUserRecord","parameters":{"service":"io.systemd.DynamicUser"},"more":true}"#;
+    if s.write_all(req).and_then(|_| s.write_all(b"\0")).is_err() {
+        return out;
+    }
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 16384];
+    loop {
+        match s.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+        // Replies are NUL-terminated; the last one has no "continues".
+        if buf.last() == Some(&0) {
+            let last = buf[..buf.len() - 1].rsplit(|b| *b == 0).next().unwrap_or(&[]);
+            if serde_json::from_slice::<Value>(last).map(|v| v["continues"] != json!(true)).unwrap_or(true) {
+                break;
+            }
+        }
+        if buf.len() > 1 << 20 {
+            break;
+        }
+    }
+    for msg in buf.split(|b| *b == 0).filter(|m| !m.is_empty()) {
+        let Ok(v) = serde_json::from_slice::<Value>(msg) else { continue };
+        let r = &v["parameters"]["record"];
+        if let (Some(uid), Some(name)) = (r["uid"].as_u64(), r["userName"].as_str()) {
+            out.push((uid as u32, name.to_string()));
+        }
+    }
+    out
 }
 
 impl Processes {
@@ -204,6 +259,7 @@ impl Processes {
             gpu_uses_cached: HashMap::new(),
             cnet: HashMap::new(),
             users: load_users(),
+            users_at: Instant::now(),
             clk_tck: unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64,
             page: unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64,
             procs: HashMap::new(),
@@ -216,6 +272,8 @@ impl Processes {
             names: containers::spawn_poller(),
             gpu: gpu::spawn_poller(),
             gpu_order: Vec::new(),
+            gpu_busy: Vec::new(),
+            rocm_last: Self::load_rocm_last(),
             frozen: false,
             focus: None,
             root: None,
@@ -225,6 +283,14 @@ impl Processes {
             saved_view: String::new(),
             prev_rank: RefCell::new(HashMap::new()),
         }
+    }
+
+    fn rocm_file() -> std::path::PathBuf {
+        Self::view_file().with_file_name("rocm-last.json")
+    }
+
+    fn load_rocm_last() -> HashMap<String, (i32, u64)> {
+        fs::read_to_string(Self::rocm_file()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
     }
 
     fn view_file() -> std::path::PathBuf {
@@ -409,6 +475,8 @@ impl Processes {
                     gpu_engines: [0.0; 5],
                     gpus: String::new(),
                     compute_queues: 0,
+                    compute_idle: false,
+                    compute_guess: false,
                     io_r,
                     io_w,
                     pid,
@@ -482,14 +550,17 @@ impl Processes {
         // ROCm compute: its queues bypass the kernel, so fdinfo misses the
         // work; count the compute units its waves occupy as compute use.
         self.kfd = gpu::kfd();
+        self.estimate_compute();
         for (pid, uses) in &self.kfd {
             let Some(p) = procs.get_mut(pid) else { continue };
             let drm = self.gpu_uses_cached.get(pid);
             let mut ids: Vec<String> = p.gpus.split(',').filter(|s| !s.is_empty()).map(String::from).collect();
             for c in uses {
                 p.compute_queues += c.queues;
-                p.gpu = p.gpu.max(c.cu_pct);
-                p.gpu_engines[1] = p.gpu_engines[1].max(c.cu_pct);
+                p.compute_idle |= c.idle;
+                p.compute_guess |= c.guess;
+                p.gpu = p.gpu.max(c.pct);
+                p.gpu_engines[1] = p.gpu_engines[1].max(c.pct);
                 // fdinfo usually counts ROCm's VRAM already; add it only
                 // where it didn't.
                 if !drm.is_some_and(|d| d.iter().any(|u| u.pdev == c.pdev && u.vram > 0)) {
@@ -505,6 +576,11 @@ impl Processes {
             ids.sort();
             p.gpus = ids.join(",");
         }
+        // A user that appeared since (a new account, a DynamicUser service).
+        if self.users_at.elapsed() > Duration::from_secs(30) && procs.values().any(|p| !self.users.contains_key(&p.uid)) {
+            self.users = load_users();
+            self.users_at = Instant::now();
+        }
         self.procs = procs;
         self.apply_saved_view();
     }
@@ -516,6 +592,96 @@ impl Processes {
             Some(r) if !r.gpu.is_empty() => r.gpu.clone(),
             _ => self.gpu.lock().unwrap().clone(),
         }
+    }
+
+    /// ROCm work isn't timed per process, so each GPU's busy time that the
+    /// timed (fdinfo) work doesn't explain goes to the processes whose
+    /// compute waves were on it, by how often they were (their share of
+    /// the sampled occupancy). Never less than their measured occupancy.
+    fn estimate_compute(&mut self) {
+        let drm = self.drm_engine_totals();
+        for (i, pdev) in self.gpu_order.iter().enumerate() {
+            let busy = self.gpu_busy.get(i).copied().unwrap_or(0.0);
+            let timed = drm.get(i).map(|e| e.iter().cloned().fold(0.0, f64::max)).unwrap_or(0.0);
+            let spare = (busy - timed).max(0.0);
+            let weight = |c: &gpu::Compute| c.active.max(c.cu_pct / 100.0);
+            let total: f64 = self.kfd.values().flatten().filter(|c| c.pdev == *pdev).map(weight).sum();
+            if total > 0.0 {
+                // Who ran work last: the one with the most waves this time.
+                if let Some((pid, _)) = self
+                    .kfd
+                    .iter()
+                    .filter_map(|(pid, u)| Some((*pid, u.iter().find(|c| c.pdev == *pdev).map(weight)?)))
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                {
+                    let mark = (pid, self.statics.get(&pid).map(|st| st.start).unwrap_or(0));
+                    if self.rocm_last.insert(pdev.clone(), mark) != Some(mark) {
+                        if let Ok(t) = serde_json::to_string(&self.rocm_last) {
+                            let _ = fs::write(Self::rocm_file(), t);
+                        }
+                    }
+                }
+                for c in self.kfd.values_mut().flatten().filter(|c| c.pdev == *pdev) {
+                    c.pct = (spare * weight(c) / total).max(c.cu_pct).min(100.0);
+                }
+                continue;
+            }
+            // Busy with no compute work running at all: ROCm queues left
+            // waiting after work (llama.cpp keeps the GPU at 100% and full
+            // clock while a model sits loaded). The kernel doesn't say whose
+            // queue it is, so it goes to the process that last ran work on
+            // this GPU (this run or an earlier one), or the only one holding
+            // queues on it; failing both, the newest holder (the queues
+            // usually come with the work that left them: a model loaded for
+            // a request), marked as a guess.
+            if spare < 5.0 {
+                continue;
+            }
+            let start = |p: &i32| self.statics.get(p).map(|st| st.start).unwrap_or(0);
+            let holders: Vec<i32> = self.kfd.iter().filter(|(_, u)| u.iter().any(|c| c.pdev == *pdev && c.queues > 0)).map(|(p, _)| *p).collect();
+            let (who, guess) = match self.rocm_last.get(pdev) {
+                Some((p, st)) if holders.contains(p) && start(p) == *st => (Some(*p), false),
+                _ if holders.len() == 1 => (Some(holders[0]), false),
+                _ => (holders.iter().max_by_key(|p| start(p)).copied(), true),
+            };
+            if let Some(c) = who.and_then(|p| self.kfd.get_mut(&p)).and_then(|u| u.iter_mut().find(|c| c.pdev == *pdev)) {
+                c.pct = spare.min(100.0);
+                c.idle = true;
+                c.guess = guess;
+            }
+        }
+    }
+
+    /// Busy % per engine per GPU from timed (fdinfo) work only.
+    fn drm_engine_totals(&self) -> Vec<[f64; 5]> {
+        let mut t = vec![[0.0; 5]; self.gpu_order.len()];
+        for uses in self.gpu_uses().values() {
+            for u in uses {
+                if let Some(i) = self.gpu_order.iter().position(|d| *d == u.pdev) {
+                    for e in 0..5 {
+                        t[i][e] = (t[i][e] + u.engines[e]).min(100.0);
+                    }
+                }
+            }
+        }
+        t
+    }
+
+    /// The processes holding ROCm compute queues on a GPU, busiest first:
+    /// name, user, estimated busy %, VRAM.
+    pub fn rocm_on(&self, pdev: &str) -> Value {
+        let mut list: Vec<(String, String, i32, f64, u64, bool, bool)> = Vec::new();
+        for (pid, uses) in &self.kfd {
+            let Some(p) = self.procs.get(pid) else { continue };
+            for c in uses.iter().filter(|c| c.pdev == pdev && c.queues > 0) {
+                list.push((display_name(p), self.user(p.uid), *pid, c.pct, c.vram, c.idle, c.guess));
+            }
+        }
+        list.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal).then(b.4.cmp(&a.4)));
+        json!(list
+            .iter()
+            .map(|(n, u, pid, pct, v, idle, guess)| json!({"name": n, "user": u, "pid": pid, "pct": pct, "vram": *v as f64, "idle": idle, "guess": guess}))
+            .collect::<Vec<_>>())
     }
 
     /// Engine busy % per GPU (summed over processes), in gpu_order.
@@ -533,7 +699,7 @@ impl Processes {
         for uses in self.kfd.values() {
             for c in uses {
                 if let Some(i) = self.gpu_order.iter().position(|d| *d == c.pdev) {
-                    t[i][1] = (t[i][1] + c.cu_pct).min(100.0);
+                    t[i][1] = (t[i][1] + c.pct).min(100.0);
                 }
             }
         }
@@ -681,7 +847,7 @@ impl Processes {
             "containerRoot": container_root,
             "gpu": p.gpu, "vram": p.vram as f64, "gtt": p.gtt as f64, "gpus": p.gpus,
             "gpuEngines": p.gpu_engines.iter().map(|v| format!("{v:.0}")).collect::<Vec<_>>().join("/")
-                + if p.compute_queues > 0 { " ROCm" } else { "" },
+                + if p.compute_idle && p.compute_guess { " ROCm idle?" } else if p.compute_idle { " ROCm idle" } else if p.compute_queues > 0 { " ROCm" } else { "" },
             "computeQueues": p.compute_queues,
             "ioR": p.io_r, "ioW": p.io_w,
             // > 0 when this collapsed row shows totals for that many processes.
@@ -976,7 +1142,8 @@ impl Processes {
                     measure(p, kind)
                 };
                 if v > 0.0 {
-                    let e = by_name.entry(display_name(p)).or_insert((0.0, 0));
+                    let name = if kind == "gpu" && p.compute_idle { format!("{} (idle ROCm queues{})", display_name(p), if p.compute_guess { "?" } else { "" }) } else { display_name(p) };
+                    let e = by_name.entry(name).or_insert((0.0, 0));
                     e.0 += v;
                     e.1 += 1;
                 }

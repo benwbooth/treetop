@@ -243,6 +243,10 @@ pub struct App {
     pub drag: Option<Drag>,
     pub mouse: Option<(u16, u16)>,
     pub mouse_moved: Instant,
+    /// Where the footer's status message was last drawn, and when the
+    /// pointer was last over it: hovering keeps it up (6 s more after).
+    pub status_rect: std::cell::Cell<Option<(u16, u16, u16)>>,
+    pub status_hovered: std::cell::Cell<Option<Instant>>,
     pub last_click: Option<(Instant, u16, u16)>,
     pub quit: bool,
     pub root_on: bool,
@@ -304,6 +308,8 @@ impl App {
             drag: None,
             mouse: None,
             mouse_moved: Instant::now(),
+            status_rect: Default::default(),
+            status_hovered: Default::default(),
             last_click: None,
             quit: false,
             root_on: false,
@@ -384,11 +390,22 @@ impl App {
         let t = text.into();
         if !t.is_empty() {
             self.status = Some((t, Instant::now()));
+            self.status_hovered.set(None);
         }
     }
 
     pub fn status_text(&self) -> Option<&str> {
-        self.status.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(6)).map(|(t, _)| t.as_str())
+        let (t, at) = self.status.as_ref()?;
+        let six = Duration::from_secs(6);
+        if at.elapsed() >= six && self.status_hovered.get().is_none_or(|h| h.elapsed() >= six) {
+            return None;
+        }
+        if let (Some((x, y, w)), Some((mx, my))) = (self.status_rect.get(), self.mouse) {
+            if my == y && mx >= x && mx < x + w {
+                self.status_hovered.set(Some(Instant::now()));
+            }
+        }
+        Some(t.as_str())
     }
 
     // ---- updates from the engine ----
@@ -926,7 +943,7 @@ impl App {
                 self.open_menu(items, 4, 1);
             }
             Act::Options => {
-                // Under ☰, the first thing in the toolbar.
+                // Under ≡, the first thing in the toolbar.
                 let items = self.options_menu();
                 self.open_menu(items, 0, 1);
             }
@@ -998,7 +1015,7 @@ impl App {
             Act::ToggleHold => {
                 self.held = !self.held;
                 self.engine.set_held(self.held);
-                self.notify(if self.held { "Holding the list: new processes join at the bottom, exited ones are struck out (Space resumes)" } else { "Live again" });
+                self.notify(if self.held { "Held: new processes go at the bottom, exited ones are struck out (Space resumes)" } else { "Live again" });
             }
             Act::Help => self.popup = Some(Popup::Help(0)),
             Act::Quit => self.quit = true,

@@ -110,8 +110,78 @@ pub struct Compute {
     pub pdev: String,
     pub vram: u64,
     pub queues: u32,
-    /// Share of the GPU's compute units occupied right now, in %.
+    /// Share of the GPU's compute units its waves occupied, in %, averaged
+    /// over the samples since the last call.
     pub cu_pct: f64,
+    /// Fraction (0..1) of those samples in which it had waves on the GPU.
+    pub active: f64,
+    /// Its estimated share of the GPU's busy time, in % (set by Processes).
+    pub pct: f64,
+    /// That share is busy time with no compute work running: idle queues
+    /// left after its last work (llama.cpp/ollama with a model loaded).
+    pub idle: bool,
+    /// Whose idle queues those are is a guess (the newest of several
+    /// holders: treetop hasn't seen which one last ran work).
+    pub guess: bool,
+}
+
+/// Running occupancy per (pid, gpu_id) since the last `kfd()`:
+/// (samples, samples with waves, occupancy sum).
+type Acc = HashMap<(i32, String), (u32, u32, f64)>;
+
+fn kfd_acc() -> &'static Mutex<Acc> {
+    static ACC: std::sync::OnceLock<Mutex<Acc>> = std::sync::OnceLock::new();
+    ACC.get_or_init(|| {
+        // cu_occupancy is an instant count of resident waves, and ROCm
+        // work comes in short kernels with gaps between them: one read per
+        // update usually lands in a gap and says 0 while the GPU is fully
+        // busy. So a thread reads it 50 times a second for every process
+        // holding compute queues, and kfd() reports the averages.
+        std::thread::Builder::new()
+            .name("kfd-sampler".into())
+            .spawn(|| {
+                let mut files: Vec<((i32, String), std::path::PathBuf)> = Vec::new();
+                let mut listed = Instant::now() - Duration::from_secs(10);
+                loop {
+                    if listed.elapsed() >= Duration::from_millis(500) {
+                        listed = Instant::now();
+                        files.clear();
+                        for e in fs::read_dir(format!("{KFD}/proc")).into_iter().flatten().flatten() {
+                            let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else { continue };
+                            let mut ids = HashSet::new();
+                            for q in fs::read_dir(e.path().join("queues")).into_iter().flatten().flatten() {
+                                ids.insert(fs::read_to_string(q.path().join("gpuid")).unwrap_or_default().trim().to_string());
+                            }
+                            for id in ids {
+                                let f = e.path().join(format!("stats_{id}/cu_occupancy"));
+                                if f.exists() {
+                                    files.push(((pid, id), f));
+                                }
+                            }
+                        }
+                    }
+                    if files.is_empty() {
+                        std::thread::sleep(Duration::from_millis(500));
+                        continue;
+                    }
+                    let reads: Vec<_> = files
+                        .iter()
+                        .filter_map(|(k, f)| Some((k, fs::read_to_string(f).ok()?.trim().parse::<f64>().ok()?)))
+                        .collect();
+                    if let Ok(mut acc) = kfd_acc().lock() {
+                        for (k, v) in reads {
+                            let a = acc.entry(k.clone()).or_default();
+                            a.0 += 1;
+                            a.1 += (v > 0.0) as u32;
+                            a.2 += v;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            })
+            .ok();
+        Mutex::new(HashMap::new())
+    })
 }
 
 const KFD: &str = "/sys/class/kfd/kfd";
@@ -141,6 +211,7 @@ fn kfd_gpus() -> &'static HashMap<String, (String, f64)> {
 pub fn kfd() -> HashMap<i32, Vec<Compute>> {
     let mut out = HashMap::new();
     let gpus = kfd_gpus();
+    let acc = std::mem::take(&mut *kfd_acc().lock().unwrap());
     for e in fs::read_dir(format!("{KFD}/proc")).into_iter().flatten().flatten() {
         let Some(pid) = e.file_name().to_str().and_then(|s| s.parse::<i32>().ok()) else { continue };
         let dir = e.path();
@@ -156,8 +227,16 @@ pub fn kfd() -> HashMap<i32, Vec<Compute>> {
             if vram == 0 && q == 0 {
                 continue;
             }
-            let occ = fs::read_to_string(dir.join(format!("stats_{id}/cu_occupancy"))).ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(0.0);
-            uses.push(Compute { pdev: pdev.clone(), vram, queues: q, cu_pct: if *cus > 0.0 { (occ / cus * 100.0).min(100.0) } else { 0.0 } });
+            let (occ, active) = match acc.get(&(pid, id.clone())) {
+                Some(&(n, act, sum)) if n > 0 => (sum / n as f64, act as f64 / n as f64),
+                // Not sampled yet (new): one reading now.
+                _ => {
+                    let v = fs::read_to_string(dir.join(format!("stats_{id}/cu_occupancy"))).ok().and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(0.0);
+                    (v, if v > 0.0 { 1.0 } else { 0.0 })
+                }
+            };
+            let cu_pct = if *cus > 0.0 { (occ / cus * 100.0).min(100.0) } else { 0.0 };
+            uses.push(Compute { pdev: pdev.clone(), vram, queues: q, cu_pct, active, pct: cu_pct, idle: false, guess: false });
         }
         if !uses.is_empty() {
             out.insert(pid, uses);
