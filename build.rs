@@ -4,6 +4,7 @@ fn main() {
     println!("cargo:rerun-if-changed=qml");
     println!("cargo:rerun-if-changed=native");
     let session_headers = wayland_session_headers();
+    let qt_dirs = qt_runtime_dirs();
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("com.benwbooth.treetop").qml_files([
         "qml/Main.qml",
         "qml/Meter.qml",
@@ -35,9 +36,32 @@ fn main() {
                 cc.includes(&session_headers);
                 cc.define("TREETOP_WAYLAND_SESSION_RESTORE", None);
             }
+            // The plugin and QML directories of the Qt we build against,
+            // put first at startup so a desktop session's own (other
+            // version) Qt modules can't shadow them.
+            if let Some((plugins, qml)) = &qt_dirs {
+                cc.define("TREETOP_QT_PLUGINS", Some(format!("{plugins:?}").as_str()));
+                cc.define("TREETOP_QT_QML", Some(format!("{qml:?}").as_str()));
+            }
         })
     };
     builder.build();
+}
+
+/// (QT_INSTALL_PLUGINS, QT_INSTALL_QML) of the Qt being built against,
+/// when they're Nix store paths (immutable, so safe to bake in).
+fn qt_runtime_dirs() -> Option<(String, String)> {
+    let qmake = std::env::var("QMAKE").unwrap_or_else(|_| "qmake6".to_owned());
+    let query = |key: &str| {
+        std::process::Command::new(&qmake)
+            .args(["-query", key])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    };
+    let (plugins, qml) = (query("QT_INSTALL_PLUGINS")?, query("QT_INSTALL_QML")?);
+    (plugins.starts_with("/nix/store/") && qml.starts_with("/nix/store/")).then_some((plugins, qml))
 }
 
 /// Qt's private QWaylandWindow headers, for setSessionRestoreId (Qt 6.11+),

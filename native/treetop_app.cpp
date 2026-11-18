@@ -288,8 +288,33 @@ static QString serverName()
     return QStringLiteral("treetop-%1").arg(getuid());
 }
 
+// Our Qt's own plugins and QML modules first. Started from a desktop
+// session (not our build shell), QT_PLUGIN_PATH and the QML import paths
+// list the session's Qt — another version after a system update — and
+// loading its platform plugin or QtQuick.Controls fails outright.
+static void preferOwnQt()
+{
+#if defined(TREETOP_QT_PLUGINS) && defined(TREETOP_QT_QML)
+    auto prepend = [](const char *var, const char *dir) {
+        if (::access(dir, F_OK) != 0) {
+            return;
+        }
+        QByteArray v = qgetenv(var);
+        if (v.split(':').contains(QByteArray(dir))) {
+            return;
+        }
+        qputenv(var, v.isEmpty() ? QByteArray(dir) : QByteArray(dir) + ':' + v);
+    };
+    prepend("QT_PLUGIN_PATH", TREETOP_QT_PLUGINS);
+    for (const char *var : {"QML_IMPORT_PATH", "QML2_IMPORT_PATH", "NIXPKGS_QT6_QML_IMPORT_PATH"}) {
+        prepend(var, TREETOP_QT_QML);
+    }
+#endif
+}
+
 int treetopRun(bool startHidden, bool toggle)
 {
+    preferOwnQt();
     // Hinted, subpixel text that matches the rest of the KDE desktop instead
     // of Qt Quick's default distance-field glyphs. Must precede any window.
     QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
@@ -329,6 +354,10 @@ int treetopRun(bool startHidden, bool toggle)
     server.listen(serverName());
 
     QQmlApplicationEngine engine;
+#ifdef TREETOP_QT_QML
+    // First in the engine's search order, whatever the environment says.
+    engine.addImportPath(QStringLiteral(TREETOP_QT_QML));
+#endif
     // KDE's configured fixed-width font (System Settings > Fonts > Fixed width).
     engine.rootContext()->setContextProperty(QStringLiteral("systemFixedFont"),
         QFontDatabase::systemFont(QFontDatabase::FixedFont));
