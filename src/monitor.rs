@@ -25,6 +25,10 @@ pub mod qobject {
         #[qsignal]
         fn inspected(self: Pin<&mut Monitor>, json: QString);
 
+        /// write_tray_icon finished: a file:// URL of the new icon.
+        #[qsignal]
+        fn tray_icon_ready(self: Pin<&mut Monitor>, url: QString);
+
         /// Root mode through polkit: one prompt, then privileged readings.
         #[qinvokable]
         fn set_root_mode(self: &Monitor, on: bool);
@@ -112,6 +116,11 @@ pub mod qobject {
         /// An environment variable as rich text.
         #[qinvokable]
         fn env_html(self: &Monitor, name: &QString, value: &QString) -> QString;
+        /// Write the live tray icon (an SVG) off the GUI thread, alternating
+        /// between two files so the tray sees a new URL; tray_icon_ready
+        /// follows with its URL.
+        #[qinvokable]
+        fn write_tray_icon(self: &Monitor, svg: &QString);
     }
 
     impl cxx_qt::Threading for Monitor {}
@@ -291,6 +300,25 @@ impl qobject::Monitor {
 
     fn last_alive(&self) -> QString {
         QString::from(&treetop_core::settings::last_alive().to_string())
+    }
+
+    fn write_tray_icon(&self, svg: &QString) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static FLIP: AtomicBool = AtomicBool::new(false);
+        let name = if FLIP.fetch_xor(true, Ordering::Relaxed) { "tray-a.svg" } else { "tray-b.svg" };
+        let svg = svg.to_string();
+        let qt = self.qt_thread();
+        std::thread::spawn(move || {
+            let dir = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join("treetop");
+            let path = dir.join(name);
+            if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, svg).is_ok() {
+                let url = format!("file://{}", path.display());
+                let _ = qt.queue(move |obj| obj.tray_icon_ready(QString::from(&url)));
+            }
+        });
     }
 
     fn env_html(&self, name: &QString, value: &QString) -> QString {

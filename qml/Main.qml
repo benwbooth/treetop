@@ -170,6 +170,35 @@ ApplicationWindow {
     }
 
     // Called for every update the sampler thread posts.
+    // ---- live tray icon ----------------------------------------------------
+    property string trayIconUrl: ""
+    property real trayPeakNet: 1
+    Connections {
+        target: mon
+        function onTray_icon_ready(url) { win.trayIconUrl = url }
+    }
+    function updateTrayIcon(s) {
+        if (!tray.visible) return
+        // The main card: the GPU with the most VRAM.
+        let g = null
+        for (const x of s.gpus) if (!g || x.vramTotal > g.vramTotal) g = x
+        const net = (s.net.rx || 0) + (s.net.tx || 0)
+        trayPeakNet = Math.max(trayPeakNet * 0.995, net, 1)
+        const v = [s.cpu.total / 100, s.mem.used / Math.max(1, s.mem.total),
+                   g ? g.busy / 100 : 0, g ? g.vramUsed / Math.max(1, g.vramTotal) : 0,
+                   net / trayPeakNet]
+        const c = ["#43c96b", "#d6b23e", "#c06fd8", "#d070a8", "#4f8fe0"]
+        const n = 64, gap = 4, w = (n - gap * 4) / 5
+        let svg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
+        for (let i = 0; i < 5; i++) {
+            const x = i * (w + gap)
+            const h = Math.max(2, Math.min(1, v[i] || 0) * n)
+            svg += '<rect x="' + x + '" y="0" width="' + w + '" height="64" rx="2" fill="#ffffff" fill-opacity="0.15"/>'
+            svg += '<rect x="' + x + '" y="' + (n - h) + '" width="' + w + '" height="' + h + '" rx="2" fill="' + c[i] + '"/>'
+        }
+        mon.write_tray_icon(svg + '</svg>')
+    }
+
     function apply(s) {
         if (!s.rowsOnly) {
             const h = hist
@@ -189,6 +218,7 @@ ApplicationWindow {
                 || (snap.disk.filesystems || []).length !== s.disk.filesystems.length
                 || snap.gpus.length !== s.gpus.length
             snap = s
+            updateTrayIcon(s)
             if (s.top) top = s.top
             if (recount) Qt.callLater(updatePlan)
             for (const n of s.notices) showStatus(n)
@@ -287,7 +317,9 @@ ApplicationWindow {
     Platform.SystemTrayIcon {
         id: tray
         visible: available && (!win.widgetInTray || settings.ownTrayIcon)
-        icon.source: Qt.resolvedUrl("treetop.svg")
+        // Five live bars (CPU, memory, GPU, VRAM, network), like the tray
+        // widget; the plain icon until the first reading.
+        icon.source: win.trayIconUrl || Qt.resolvedUrl("treetop.svg")
         tooltip: win.summary
         onActivated: (reason) => {
             if (reason === Platform.SystemTrayIcon.Trigger || reason === Platform.SystemTrayIcon.Unknown)
