@@ -46,8 +46,15 @@ fn launch_command() -> String {
 }
 
 /// Whether the treetop widget is enabled in a Plasma system tray (then the
-/// app doesn't need a tray icon of its own).
+/// app doesn't need a tray icon of its own). Only inside Plasma: the applets
+/// file stays around in other sessions (Hyprland), where no panel shows it.
 pub fn tray_widget_present() -> bool {
+    let in_plasma = std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("KDE")))
+        .unwrap_or(false);
+    if !in_plasma {
+        return false;
+    }
     let rc = config_home().join("plasma-org.kde.plasma.desktop-appletsrc");
     std::fs::read_to_string(rc)
         .map(|t| t.lines().any(|l| l.starts_with("extraItems=") && l.split(['=', ',']).any(|i| i == "com.benwbooth.treetop")))
