@@ -49,6 +49,13 @@ Rectangle {
         MenuItem { text: "Hide GPU " + panel.number; onTriggered: panel.hideRequested() }
     }
 
+    // Menus are drawn inside this window, so a click in another window
+    // never reaches them: close them when the window loses focus.
+    Connections {
+        target: panel.Window.window
+        function onActiveChanged() { if (!panel.Window.window.active) ctx.close() }
+    }
+
     ColumnLayout {
         id: col
         anchors.fill: parent

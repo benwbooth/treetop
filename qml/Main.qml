@@ -27,6 +27,10 @@ ApplicationWindow {
     flags: macOS ? (Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint)
                  : (Qt.Window | Qt.FramelessWindowHint)
     function toggleMaximized() { visibility === Window.Maximized ? showNormal() : showMaximized() }
+    // Menus are drawn inside this window, so a click in another window never
+    // reaches them (the compositor doesn't know about them): close them when
+    // the window loses focus.
+    onActiveChanged: if (!active) { optionsMenu.close(); viewMenu.close(); resMenu.close(); gpuChooser.close(); gpuMenu.close() }
 
     // ---- theme -----------------------------------------------------------
     SystemPalette { id: pal; colorGroup: SystemPalette.Active }

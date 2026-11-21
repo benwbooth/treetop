@@ -1085,4 +1085,11 @@ FocusScope {
         MenuItem { text: "Collapse all"; onTriggered: table.monitor.set_expanded_all(false) }
         MenuItem { text: "Clear tags"; enabled: Object.keys(table.tagged).length > 0; onTriggered: table.tagged = ({}) }
     }
+
+    // Menus are drawn inside this window, so a click in another window
+    // never reaches them: close them when the window loses focus.
+    Connections {
+        target: table.Window.window
+        function onActiveChanged() { if (!table.Window.window.active) { columnMenu.close(); menu.close() } }
+    }
 }
