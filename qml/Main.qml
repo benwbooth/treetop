@@ -400,71 +400,81 @@ ApplicationWindow {
     readonly property bool hasProcess: table.currentPid > 0 || Object.keys(table.tagged).length > 0
     readonly property bool treeView: win.view === "tree" || win.view === "containers"
     readonly property var menuModel: [
-        { title: "treetop", items: [
-            { id: "about", text: "About treetop" },
+        { title: "treetop", icon: "utilities-system-monitor", items: [
+            { id: "about", icon: "help-about", text: "About treetop" },
             { separator: true },
-            { id: "autostart", text: "Start at Login (in the Tray)", checkable: true, checked: win.autostart },
-            { id: "own-tray", text: "Separate Tray Icon (besides the tray widget)", checkable: true,
+            { id: "autostart", icon: "system-run-symbolic", text: "Start at Login (in the Tray)", checkable: true, checked: win.autostart },
+            { id: "own-tray", icon: "preferences-desktop-notification-symbolic", text: "Separate Tray Icon (besides the tray widget)", checkable: true,
               checked: settings.ownTrayIcon, enabled: win.widgetInTray },
-            { id: "root", text: win.snap.rootStarting ? "Root Access (waiting for polkit…)" : "Root Access (polkit)",
+            { id: "root", icon: win.snap.root ? "object-unlocked-symbolic" : "object-locked-symbolic", text: win.snap.rootStarting ? "Root Access (waiting for polkit…)" : "Root Access (polkit)",
               checkable: true, checked: !!win.snap.root, enabled: !win.snap.rootStarting },
-            { id: "interval", text: "Update Every", items: [250, 500, 1000, 2000, 5000].map(v => (
-                { id: "interval-" + v, text: (v / 1000) + " s", checkable: true, checked: settings.interval === v })) },
+            { id: "interval", icon: "chronometer-symbolic", text: "Update Every", items: [250, 500, 1000, 2000, 5000].map(v => (
+                { id: "interval-" + v, icon: win.intervalIcons[v], text: (v / 1000) + " s", checkable: true, checked: settings.interval === v })) },
             { separator: true },
-            { id: "hide", text: "Hide treetop", shortcut: "F10" },
-            { id: "quit", text: "Quit treetop", shortcut: "Ctrl+Q" } ] },
-        { title: "Edit", items: [
-            { id: "find", text: "Find…", shortcut: "Ctrl+F" },
-            { id: "clear-filter", text: "Clear Filter", shortcut: "Esc", enabled: filterField.text !== "" },
+            { id: "hide", icon: "view-hidden-symbolic", text: "Hide treetop", shortcut: "F10" },
+            { id: "quit", icon: "application-exit-symbolic", text: "Quit treetop", shortcut: "Ctrl+Q" } ] },
+        { title: "Edit", icon: "document-edit-symbolic", items: [
+            { id: "find", icon: "edit-find-symbolic", text: "Find…", shortcut: "Ctrl+F" },
+            { id: "clear-filter", icon: "edit-clear-symbolic", text: "Clear Filter", shortcut: "Esc", enabled: filterField.text !== "" },
             { separator: true },
-            { id: "tag", text: "Tag Process", shortcut: "Ins", enabled: table.currentPid > 0 },
-            { id: "clear-tags", text: "Clear Tags", shortcut: "U", enabled: Object.keys(table.tagged).length > 0 } ] },
-        { title: "View", items: [
-            { id: "view-tree", text: "Process Tree", shortcut: "T", checkable: true, checked: win.view === "tree" },
-            { id: "view-flat", text: "List", shortcut: "F5", checkable: true, checked: win.view === "flat" },
-            { id: "view-containers", text: "Containers", shortcut: "C", checkable: true, checked: win.view === "containers" },
-            { id: "view-gpu", text: "GPU", shortcut: "G", checkable: true, checked: win.view === "gpu" },
+            { id: "tag", icon: "tag-symbolic", text: "Tag Process", shortcut: "Ins", enabled: table.currentPid > 0 },
+            { id: "clear-tags", icon: "edit-clear-all-symbolic", text: "Clear Tags", shortcut: "U", enabled: Object.keys(table.tagged).length > 0 } ] },
+        { title: "View", icon: "view-visible-symbolic", items: [
+            { id: "view-tree", icon: "view-list-tree-symbolic", text: "Process Tree", shortcut: "T", checkable: true, checked: win.view === "tree" },
+            { id: "view-flat", icon: "view-list-text-symbolic", text: "List", shortcut: "F5", checkable: true, checked: win.view === "flat" },
+            { id: "view-containers", icon: "class-or-package-symbolic", text: "Containers", shortcut: "C", checkable: true, checked: win.view === "containers" },
+            { id: "view-gpu", icon: "graphics-symbolic", text: "GPU", shortcut: "G", checkable: true, checked: win.view === "gpu" },
             { separator: true },
-            { id: "hold", text: "Hold List", shortcut: "Space", checkable: true, checked: win.held },
-            { id: "expand-all", text: "Expand All", shortcut: "*", enabled: win.treeView },
-            { id: "collapse-all", text: "Collapse All", shortcut: "_", enabled: win.treeView },
-            { id: "sort", text: "Sort By", items: [
-                { id: "sort-cpu", text: "CPU", shortcut: "Shift+P", checkable: true, checked: table.sortKey === "cpu" },
-                { id: "sort-mem", text: "Memory", shortcut: "Shift+M", checkable: true, checked: table.sortKey === "mem" },
-                { id: "sort-time", text: "Time", shortcut: "Shift+T", checkable: true, checked: table.sortKey === "time" } ] },
+            { id: "hold", icon: "media-playback-pause-symbolic", text: "Hold List", shortcut: "Space", checkable: true, checked: win.held },
+            { id: "expand-all", icon: "expand-all", text: "Expand All", shortcut: "*", enabled: win.treeView },
+            { id: "collapse-all", icon: "collapse-all", text: "Collapse All", shortcut: "_", enabled: win.treeView },
+            { id: "sort", icon: "view-sort-descending-symbolic", text: "Sort By", items: [
+                { id: "sort-cpu", icon: "cpu", text: "CPU", shortcut: "Shift+P", checkable: true, checked: table.sortKey === "cpu" },
+                { id: "sort-mem", icon: "memory", text: "Memory", shortcut: "Shift+M", checkable: true, checked: table.sortKey === "mem" },
+                { id: "sort-time", icon: "player-time-symbolic", text: "Time", shortcut: "Shift+T", checkable: true, checked: table.sortKey === "time" } ] },
             { separator: true },
-            { id: "resources", text: "Show Resources", shortcut: "R", checkable: true, checked: settings.showResources },
-            { id: "cards", text: "Graphs", checkable: true, checked: settings.showCards },
-            { id: "meters", text: "Meters", checkable: true, checked: settings.showMeters },
-            { id: "combine", text: "Combine CPU Cores", shortcut: "1", checkable: true, checked: settings.cpuCombined },
-            { id: "tint", text: "Tint Resource Columns", checkable: true, checked: settings.tintColumns },
-            { id: "kernel", text: "Kernel Threads", shortcut: "Shift+K", checkable: true, checked: settings.showKernel },
-            { id: "gpus", text: "GPUs", enabled: win.allGpus.length > 0, items: win.allGpus.length > 0
-                ? win.allGpus.map((g, i) => ({ id: "gpu-" + i, text: "GPU" + (i + 1) + " — " + (g.name || "") + (g.idle ? "  (idle)" : ""),
+            { id: "resources", icon: "office-chart-line-symbolic", text: "Show Resources", shortcut: "R", checkable: true, checked: settings.showResources },
+            { id: "cards", icon: "office-chart-area-symbolic", text: "Graphs", checkable: true, checked: settings.showCards },
+            { id: "meters", icon: "view-statistics-symbolic", text: "Meters", checkable: true, checked: settings.showMeters },
+            { id: "combine", icon: "merge-symbolic", text: "Combine CPU Cores", shortcut: "1", checkable: true, checked: settings.cpuCombined },
+            { id: "tint", icon: "color-fill-symbolic", text: "Tint Resource Columns", checkable: true, checked: settings.tintColumns },
+            { id: "kernel", icon: "preferences-system-symbolic", text: "Kernel Threads", shortcut: "Shift+K", checkable: true, checked: settings.showKernel },
+            { id: "gpus", icon: "show-gpu-effects-symbolic", text: "GPUs", enabled: win.allGpus.length > 0, items: win.allGpus.length > 0
+                ? win.allGpus.map((g, i) => ({ id: "gpu-" + i, icon: g.idle ? "video-card-inactive-symbolic" : "graphics-symbolic", text: "GPU" + (i + 1) + " — " + (g.name || "") + (g.idle ? "  (idle)" : ""),
                                                 checkable: true, checked: !!g.shown }))
-                : [{ id: "gpu-none", text: "No GPUs", enabled: false }] },
+                : [{ id: "gpu-none", icon: "video-card-inactive-symbolic", text: "No GPUs", enabled: false }] },
             { separator: true },
-            { id: "zoom-in", text: "Bigger Text", shortcut: "Ctrl+=" },
-            { id: "zoom-out", text: "Smaller Text", shortcut: "Ctrl+-" },
-            { id: "zoom-reset", text: "Actual Size", shortcut: "Ctrl+0" } ] },
-        { title: "Process", items: [
-            { id: "details", text: "Details…", shortcut: "Return", enabled: table.currentPid > 0 },
-            { id: "focus", text: table.focusPid > 0 && table.focusPid === table.currentPid ? "Show All Processes" : "Focus on This Process Tree",
+            { id: "zoom-in", icon: "zoom-in-symbolic", text: "Bigger Text", shortcut: "Ctrl+=" },
+            { id: "zoom-out", icon: "zoom-out-symbolic", text: "Smaller Text", shortcut: "Ctrl+-" },
+            { id: "zoom-reset", icon: "zoom-original-symbolic", text: "Actual Size", shortcut: "Ctrl+0" } ] },
+        { title: "Process", icon: "system-run-symbolic", items: [
+            { id: "details", icon: "documentinfo", text: "Details…", shortcut: "Return", enabled: table.currentPid > 0 },
+            { id: "focus", icon: "zoom-select", text: table.focusPid > 0 && table.focusPid === table.currentPid ? "Show All Processes" : "Focus on This Process Tree",
               shortcut: "F", enabled: table.currentPid > 0 },
             { separator: true },
-            { id: "sig-15", text: "Terminate (SIGTERM)", enabled: win.hasProcess },
-            { id: "sig-9", text: "Kill (SIGKILL)", enabled: win.hasProcess },
-            { id: "sig-19", text: "Stop (SIGSTOP)", enabled: win.hasProcess },
-            { id: "sig-18", text: "Continue (SIGCONT)", enabled: win.hasProcess },
-            { id: "signal", text: "Send Signal", enabled: win.hasProcess, items: win.signalList.map(g => (
-                { id: "signal-" + g.value, text: "SIG" + g.name + "  (" + g.value + ")" })) },
+            { id: "sig-15", icon: "process-stop", text: "Terminate (SIGTERM)", enabled: win.hasProcess },
+            { id: "sig-9", icon: "edit-delete", text: "Kill (SIGKILL)", enabled: win.hasProcess },
+            { id: "sig-19", icon: "media-playback-pause", text: "Stop (SIGSTOP)", enabled: win.hasProcess },
+            { id: "sig-18", icon: "media-playback-start", text: "Continue (SIGCONT)", enabled: win.hasProcess },
+            { id: "signal", icon: "send-to-symbolic", text: "Send Signal", enabled: win.hasProcess, items: win.signalList.map(g => (
+                { id: "signal-" + g.value, icon: win.signalIcons[g.name] || "send-to-symbolic", text: "SIG" + g.name + "  (" + g.value + ")" })) },
             { separator: true },
-            { id: "nice-up", text: "Nice +1 (Lower Priority)", shortcut: "F8", enabled: table.currentPid > 0 },
-            { id: "nice-down", text: "Nice −1 (Higher Priority)", shortcut: "F7", enabled: table.currentPid > 0 } ] },
-        { title: "Help", items: [
-            { id: "keys", text: "treetop Keys", shortcut: "F1" } ] }
+            { id: "nice-up", icon: "go-down-symbolic", text: "Nice +1 (Lower Priority)", shortcut: "F8", enabled: table.currentPid > 0 },
+            { id: "nice-down", icon: "go-up-symbolic", text: "Nice −1 (Higher Priority)", shortcut: "F7", enabled: table.currentPid > 0 } ] },
+        { title: "Help", icon: "help-contents-symbolic", items: [
+            { id: "keys", icon: "input-keyboard-symbolic", text: "treetop Keys", shortcut: "F1" } ] }
     ]
     readonly property var signalList: JSON.parse(mon.signal_list())
+    // Icons for the menus: Send Signal's (the common four as in the
+    // process list's context menu) and Update Every's, fast to slow.
+    readonly property var signalIcons: ({
+        TERM: "process-stop", KILL: "edit-delete", HUP: "view-refresh-symbolic", INT: "dialog-cancel",
+        QUIT: "application-exit-symbolic", STOP: "media-playback-pause", CONT: "media-playback-start",
+        USR1: "user-identity", USR2: "user-others", ABRT: "tools-report-bug", ALRM: "alarm-symbolic",
+        WINCH: "transform-scale" })
+    readonly property var intervalIcons: ({
+        250: "speedometer-symbolic", 500: "media-seek-forward-symbolic", 1000: "media-playback-start-symbolic",
+        2000: "clock-symbolic", 5000: "kteatime-symbolic" })
 
     function menuAction(id) {
         if (id.startsWith("interval-")) { settings.interval = Number(id.slice(9)); return }
@@ -532,7 +542,7 @@ ApplicationWindow {
         id: appMenu
         model: win.menuModel
         onTriggered: id => win.menuAction(id)
-        itemDelegate: Component { KeyMenuItem { property string shortcutText; keys: shortcutText } }
+        popupType: Popup.Item
         onClosed: { tips.disarm(); menuButton.closedAt = Date.now() }
     }
 
