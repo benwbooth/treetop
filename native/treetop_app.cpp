@@ -6,6 +6,8 @@
 #include <QtGui/QPalette>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QLockFile>
+#include <QtCore/QThread>
 #include <QtCore/QSettings>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
@@ -288,9 +290,25 @@ private:
 };
 }
 
+// The single instance's socket and lock, by full path in the runtime
+// directory. A bare name went in $TMPDIR, which differs between shells
+// (each nix-shell has its own), so a start from another environment
+// never found the running one and two ran, each with a tray icon.
+static QString instanceDir()
+{
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (dir.isEmpty()) {
+        dir = QStringLiteral("/tmp/treetop-%1").arg(getuid());
+    } else {
+        dir += QStringLiteral("/treetop");
+    }
+    QDir().mkpath(dir);
+    return dir;
+}
+
 static QString serverName()
 {
-    return QStringLiteral("treetop-%1").arg(getuid());
+    return instanceDir() + QStringLiteral("/instance.sock");
 }
 
 // Our Qt's own plugins and QML modules first. Started from a desktop
@@ -443,7 +461,13 @@ int treetopRun(bool startHidden, bool toggle)
     QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("treetop"),
         QIcon(QStringLiteral(":/qt/qml/com/benwbooth/treetop/qml/treetop.svg"))));
 
-    {
+    // Whoever holds the lock is the instance; anyone else hands over to
+    // it. While it's still starting (its socket not up yet) we wait for
+    // it rather than starting a second one.
+    QLockFile lock(instanceDir() + QStringLiteral("/instance.lock"));
+    lock.setStaleLockTime(0);
+    const bool first = lock.tryLock(0);
+    for (int tries = first ? 1 : 50; tries > 0; --tries) {
         QLocalSocket probe;
         probe.connectToServer(serverName());
         if (probe.waitForConnected(300)) {
@@ -457,10 +481,21 @@ int treetopRun(bool startHidden, bool toggle)
             probe.waitForBytesWritten(500);
             return 0;
         }
+        if (!first) {
+            QThread::msleep(100);
+        }
+    }
+    if (!first && !lock.tryLock(0)) {
+        // It holds the lock but never answered: leave it be.
+        qWarning("treetop: another instance holds %s but doesn't answer", qPrintable(lock.fileName()));
+        return 1;
     }
     QLocalServer::removeServer(serverName());
     QLocalServer server;
     server.listen(serverName());
+    // Quitting, stop answering: a start meanwhile waits for our lock to go
+    // and takes over, instead of handing "show" to us and exiting.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &server, &QLocalServer::close);
 
     qmlRegisterType<GlobalMenuBar>("GlobalMenu", 1, 0, "GlobalMenuBar");
     QQmlApplicationEngine engine;
