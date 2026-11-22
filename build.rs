@@ -96,7 +96,15 @@ fn qt_private_headers() -> (Vec<std::path::PathBuf>, bool) {
     if !gui.join("QtGui/qpa/qplatformwindow_p.h").is_file() {
         return (Vec::new(), false);
     }
+    let mut dirs = vec![gui.join("QtGui"), gui, core.join("QtCore"), core];
+    // The private headers include qplatformdefs.h, from the mkspec.
+    if let (Some(data), Some(spec)) = (query("QT_INSTALL_ARCHDATA"), query("QMAKE_XSPEC")) {
+        let mkspec = std::path::Path::new(&data).join("mkspecs").join(spec);
+        if mkspec.join("qplatformdefs.h").is_file() {
+            dirs.push(mkspec);
+        }
+    }
     let parts: Vec<u32> = version.split('.').filter_map(|p| p.parse().ok()).collect();
     let session_restore = parts.len() >= 2 && (parts[0], parts[1]) >= (6, 11);
-    (vec![gui.join("QtGui"), gui, core.join("QtCore"), core], session_restore)
+    (dirs, session_restore)
 }
