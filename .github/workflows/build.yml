@@ -1,10 +1,10 @@
 name: build
 
+# Only for a release (a v* tag) or when started by hand (gh workflow run
+# build), not on every push.
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 permissions:

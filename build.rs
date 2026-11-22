@@ -3,7 +3,7 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 fn main() {
     println!("cargo:rerun-if-changed=qml");
     println!("cargo:rerun-if-changed=native");
-    let session_headers = wayland_session_headers();
+    let (private_headers, session_restore) = qt_private_headers();
     let qt_dirs = qt_runtime_dirs();
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("com.benwbooth.treetop").qml_files([
         "qml/Main.qml",
@@ -39,8 +39,10 @@ fn main() {
         builder.cc_builder(|cc| {
             // Shown in About treetop.
             cc.define("TREETOP_VERSION", Some(format!("{:?}", env!("CARGO_PKG_VERSION")).as_str()));
-            if !session_headers.is_empty() {
-                cc.includes(&session_headers);
+            // Qt's private headers: the global menu bar (QPA) on any Qt,
+            // and on 6.11+ the window's session restore id.
+            cc.includes(&private_headers);
+            if session_restore {
                 cc.define("TREETOP_WAYLAND_SESSION_RESTORE", None);
             }
             // The plugin and QML directories of the Qt we build against,
@@ -71,9 +73,11 @@ fn qt_runtime_dirs() -> Option<(String, String)> {
     (plugins.starts_with("/nix/store/") && qml.starts_with("/nix/store/")).then_some((plugins, qml))
 }
 
-/// Qt's private QWaylandWindow headers, for setSessionRestoreId (Qt 6.11+),
-/// which lets KWin put the window back where it was. Empty if unavailable.
-fn wayland_session_headers() -> Vec<std::path::PathBuf> {
+/// Qt's private QtGui/QtCore header directories (the global menu bar needs
+/// the QPA ones on any Qt), and whether this Qt is 6.11+, for
+/// QWaylandWindow::setSessionRestoreId, which lets the compositor put the
+/// window back where it was. Empty and false if they aren't installed.
+fn qt_private_headers() -> (Vec<std::path::PathBuf>, bool) {
     let qmake = std::env::var("QMAKE").unwrap_or_else(|_| "qmake6".to_owned());
     let query = |key: &str| {
         std::process::Command::new(&qmake)
@@ -84,17 +88,15 @@ fn wayland_session_headers() -> Vec<std::path::PathBuf> {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
     };
     let (Some(headers), Some(version)) = (query("QT_INSTALL_HEADERS"), query("QT_VERSION")) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
-    let parts: Vec<u32> = version.split('.').filter_map(|p| p.parse().ok()).collect();
-    if parts.len() < 2 || (parts[0], parts[1]) < (6, 11) {
-        return Vec::new();
-    }
     let headers = std::path::PathBuf::from(headers);
     let gui = headers.join("QtGui").join(&version);
     let core = headers.join("QtCore").join(&version);
     if !gui.join("QtGui/qpa/qplatformwindow_p.h").is_file() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
-    vec![gui.join("QtGui"), gui, core.join("QtCore"), core]
+    let parts: Vec<u32> = version.split('.').filter_map(|p| p.parse().ok()).collect();
+    let session_restore = parts.len() >= 2 && (parts[0], parts[1]) >= (6, 11);
+    (vec![gui.join("QtGui"), gui, core.join("QtCore"), core], session_restore)
 }
