@@ -1,5 +1,7 @@
 #include "treetop_app.h"
 
+#include <optional>
+#include <QtGui/QPalette>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QSettings>
@@ -312,6 +314,60 @@ static void preferOwnQt()
 #endif
 }
 
+// The KDE colour scheme (kdeglobals' [Colors:*] groups) as a palette, for
+// when Qt runs without the Plasma platform theme that would apply it.
+// Empty (no change) if there's no kdeglobals or it has no colours.
+static std::optional<QPalette> kdeSchemePalette()
+{
+    const QString file = QStandardPaths::locate(QStandardPaths::GenericConfigLocation, QStringLiteral("kdeglobals"));
+    if (file.isEmpty()) {
+        return std::nullopt;
+    }
+    QSettings kg(file, QSettings::IniFormat);
+    auto color = [&kg](const char *group, const char *key) -> QColor {
+        const QVariant v = kg.value(QStringLiteral("Colors:%1/%2").arg(QLatin1String(group), QLatin1String(key)));
+        const QStringList rgb = v.typeId() == QMetaType::QStringList ? v.toStringList() : v.toString().split(QLatin1Char(','));
+        if (rgb.size() < 3) {
+            return {};
+        }
+        return QColor(rgb[0].trimmed().toInt(), rgb[1].trimmed().toInt(), rgb[2].trimmed().toInt(), rgb.size() > 3 ? rgb[3].trimmed().toInt() : 255);
+    };
+    const QColor window = color("Window", "BackgroundNormal");
+    if (!window.isValid()) {
+        return std::nullopt;
+    }
+    QPalette pal;
+    auto set = [&pal](QPalette::ColorRole role, const QColor &c, const QColor &inactive = {}) {
+        if (!c.isValid()) {
+            return;
+        }
+        pal.setColor(QPalette::Active, role, c);
+        pal.setColor(QPalette::Inactive, role, c);
+        pal.setColor(QPalette::Disabled, role, inactive.isValid() ? inactive : c);
+    };
+    set(QPalette::Window, window);
+    set(QPalette::WindowText, color("Window", "ForegroundNormal"), color("Window", "ForegroundInactive"));
+    set(QPalette::Base, color("View", "BackgroundNormal"));
+    set(QPalette::AlternateBase, color("View", "BackgroundAlternate"));
+    set(QPalette::Text, color("View", "ForegroundNormal"), color("View", "ForegroundInactive"));
+    set(QPalette::PlaceholderText, color("View", "ForegroundInactive"));
+    set(QPalette::Button, color("Button", "BackgroundNormal"));
+    set(QPalette::ButtonText, color("Button", "ForegroundNormal"), color("Button", "ForegroundInactive"));
+    set(QPalette::Highlight, color("Selection", "BackgroundNormal"));
+    set(QPalette::HighlightedText, color("Selection", "ForegroundNormal"));
+    set(QPalette::ToolTipBase, color("Tooltip", "BackgroundNormal"));
+    set(QPalette::ToolTipText, color("Tooltip", "ForegroundNormal"));
+    set(QPalette::Link, color("View", "ForegroundLink"));
+    set(QPalette::LinkVisited, color("View", "ForegroundVisited"));
+    // Bevels from the window colour, as KColorScheme does.
+    set(QPalette::Light, window.lighter(150));
+    set(QPalette::Midlight, window.lighter(125));
+    set(QPalette::Mid, window.darker(150));
+    set(QPalette::Dark, window.darker(200));
+    set(QPalette::Shadow, QColor(0, 0, 0));
+    return pal;
+}
+
 int treetopRun(bool startHidden, bool toggle)
 {
     preferOwnQt();
@@ -326,23 +382,34 @@ int treetopRun(bool startHidden, bool toggle)
     static int argc = 1;
     static char arg0[] = "treetop";
     static char *argv[] = {arg0, nullptr};
-    // Outside Plasma, Qt's generic theme, not KDE's: a session that lists
-    // KDE only as a fallback (arbor sets "arbor:KDE", for portals and
-    // themes) made Qt load the Plasma platform theme, whose tray icon never
-    // appears outside Plasma, so treetop had none. The primary desktop
-    // decides while Qt picks its theme; then it's put back for anything we
-    // start.
+    // Outside Plasma, not KDE's platform theme: a session that lists KDE
+    // only as a fallback (arbor sets "arbor:KDE", for portals and themes)
+    // made Qt load the Plasma platform theme, whose tray icon never appears
+    // outside Plasma, so treetop had none. The primary desktop decides while
+    // Qt picks its theme (then it's put back for anything we start): the
+    // portal theme (the light/dark preference; its tray icon works), and
+    // the KDE colour scheme from kdeglobals on top, as in Plasma.
     const QByteArray desktops = qgetenv("XDG_CURRENT_DESKTOP");
     const QList<QByteArray> desktopList = desktops.split(':');
     const bool kdeFallbackOnly = desktopList.size() > 1
         && desktopList.first().compare("KDE", Qt::CaseInsensitive) != 0
         && std::any_of(desktopList.begin(), desktopList.end(), [](const QByteArray &d) { return d.compare("KDE", Qt::CaseInsensitive) == 0; });
+    const bool portalTheme = kdeFallbackOnly && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORMTHEME");
     if (kdeFallbackOnly) {
         qputenv("XDG_CURRENT_DESKTOP", desktopList.first());
+    }
+    if (portalTheme) {
+        qputenv("QT_QPA_PLATFORMTHEME", "xdgdesktopportal");
     }
     QApplication app(argc, argv);
     if (kdeFallbackOnly) {
         qputenv("XDG_CURRENT_DESKTOP", desktops);
+        if (portalTheme) {
+            qunsetenv("QT_QPA_PLATFORMTHEME");
+        }
+        if (const auto pal = kdeSchemePalette()) {
+            QGuiApplication::setPalette(*pal);
+        }
     }
     QApplication::setApplicationName(QStringLiteral("treetop"));
     QApplication::setOrganizationName(QStringLiteral("treetop"));
