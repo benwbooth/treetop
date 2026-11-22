@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import QtCore as QtCore
 import Qt.labs.platform as Platform
 import com.benwbooth.treetop
+import GlobalMenu
 import "Fmt.js" as Fmt
 
 ApplicationWindow {
@@ -30,7 +31,7 @@ ApplicationWindow {
     // Menus are drawn inside this window, so a click in another window never
     // reaches them (the compositor doesn't know about them): close them when
     // the window loses focus.
-    onActiveChanged: if (!active) { optionsMenu.close(); viewMenu.close(); resMenu.close(); gpuChooser.close(); gpuMenu.close() }
+    onActiveChanged: if (!active) { appMenu.close(); viewMenu.close(); resMenu.close(); gpuChooser.close(); gpuMenu.close() }
 
     // ---- theme -----------------------------------------------------------
     SystemPalette { id: pal; colorGroup: SystemPalette.Active }
@@ -161,6 +162,9 @@ ApplicationWindow {
     onVisibleChanged: {
         mon.set_rows_enabled(visible)
         if (booted) mon.mark_alive(visible)
+        // The menu's address goes on the window's surface, which exists
+        // only while the window is shown.
+        if (visible) Qt.callLater(globalMenu.attach)
     }
     Timer {
         interval: 5000; running: true; repeat: true
@@ -388,6 +392,150 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+-"; onActivated: settings.fontDelta = Math.max(-4, settings.fontDelta - 0.5) }
     Shortcut { sequence: "Ctrl+0"; onActivated: settings.fontDelta = 0 }
 
+    // ---- menus -------------------------------------------------------------
+    // Defined once: exported to the desktop's global menu bar (GlobalMenuBar:
+    // hearth's top bar, Plasma's Global Menu) and shown by the toolbar's ☰
+    // button (AppMenu). Shortcuts are only shown there: the keys above (and
+    // the process list's htop keys) do the work.
+    readonly property bool hasProcess: table.currentPid > 0 || Object.keys(table.tagged).length > 0
+    readonly property bool treeView: win.view === "tree" || win.view === "containers"
+    readonly property var menuModel: [
+        { title: "treetop", items: [
+            { id: "about", text: "About treetop" },
+            { separator: true },
+            { id: "autostart", text: "Start at Login (in the Tray)", checkable: true, checked: win.autostart },
+            { id: "own-tray", text: "Separate Tray Icon (besides the tray widget)", checkable: true,
+              checked: settings.ownTrayIcon, enabled: win.widgetInTray },
+            { id: "root", text: win.snap.rootStarting ? "Root Access (waiting for polkit…)" : "Root Access (polkit)",
+              checkable: true, checked: !!win.snap.root, enabled: !win.snap.rootStarting },
+            { id: "interval", text: "Update Every", items: [250, 500, 1000, 2000, 5000].map(v => (
+                { id: "interval-" + v, text: (v / 1000) + " s", checkable: true, checked: settings.interval === v })) },
+            { separator: true },
+            { id: "hide", text: "Hide treetop", shortcut: "F10" },
+            { id: "quit", text: "Quit treetop", shortcut: "Ctrl+Q" } ] },
+        { title: "Edit", items: [
+            { id: "find", text: "Find…", shortcut: "Ctrl+F" },
+            { id: "clear-filter", text: "Clear Filter", shortcut: "Esc", enabled: filterField.text !== "" },
+            { separator: true },
+            { id: "tag", text: "Tag Process", shortcut: "Ins", enabled: table.currentPid > 0 },
+            { id: "clear-tags", text: "Clear Tags", shortcut: "U", enabled: Object.keys(table.tagged).length > 0 } ] },
+        { title: "View", items: [
+            { id: "view-tree", text: "Process Tree", shortcut: "T", checkable: true, checked: win.view === "tree" },
+            { id: "view-flat", text: "List", shortcut: "F5", checkable: true, checked: win.view === "flat" },
+            { id: "view-containers", text: "Containers", shortcut: "C", checkable: true, checked: win.view === "containers" },
+            { id: "view-gpu", text: "GPU", shortcut: "G", checkable: true, checked: win.view === "gpu" },
+            { separator: true },
+            { id: "hold", text: "Hold List", shortcut: "Space", checkable: true, checked: win.held },
+            { id: "expand-all", text: "Expand All", shortcut: "*", enabled: win.treeView },
+            { id: "collapse-all", text: "Collapse All", shortcut: "_", enabled: win.treeView },
+            { id: "sort", text: "Sort By", items: [
+                { id: "sort-cpu", text: "CPU", shortcut: "Shift+P", checkable: true, checked: table.sortKey === "cpu" },
+                { id: "sort-mem", text: "Memory", shortcut: "Shift+M", checkable: true, checked: table.sortKey === "mem" },
+                { id: "sort-time", text: "Time", shortcut: "Shift+T", checkable: true, checked: table.sortKey === "time" } ] },
+            { separator: true },
+            { id: "resources", text: "Show Resources", shortcut: "R", checkable: true, checked: settings.showResources },
+            { id: "cards", text: "Graphs", checkable: true, checked: settings.showCards },
+            { id: "meters", text: "Meters", checkable: true, checked: settings.showMeters },
+            { id: "combine", text: "Combine CPU Cores", shortcut: "1", checkable: true, checked: settings.cpuCombined },
+            { id: "tint", text: "Tint Resource Columns", checkable: true, checked: settings.tintColumns },
+            { id: "kernel", text: "Kernel Threads", shortcut: "Shift+K", checkable: true, checked: settings.showKernel },
+            { id: "gpus", text: "GPUs", enabled: win.allGpus.length > 0, items: win.allGpus.length > 0
+                ? win.allGpus.map((g, i) => ({ id: "gpu-" + i, text: "GPU" + (i + 1) + " — " + (g.name || "") + (g.idle ? "  (idle)" : ""),
+                                                checkable: true, checked: !!g.shown }))
+                : [{ id: "gpu-none", text: "No GPUs", enabled: false }] },
+            { separator: true },
+            { id: "zoom-in", text: "Bigger Text", shortcut: "Ctrl+=" },
+            { id: "zoom-out", text: "Smaller Text", shortcut: "Ctrl+-" },
+            { id: "zoom-reset", text: "Actual Size", shortcut: "Ctrl+0" } ] },
+        { title: "Process", items: [
+            { id: "details", text: "Details…", shortcut: "Return", enabled: table.currentPid > 0 },
+            { id: "focus", text: table.focusPid > 0 && table.focusPid === table.currentPid ? "Show All Processes" : "Focus on This Process Tree",
+              shortcut: "F", enabled: table.currentPid > 0 },
+            { separator: true },
+            { id: "sig-15", text: "Terminate (SIGTERM)", enabled: win.hasProcess },
+            { id: "sig-9", text: "Kill (SIGKILL)", enabled: win.hasProcess },
+            { id: "sig-19", text: "Stop (SIGSTOP)", enabled: win.hasProcess },
+            { id: "sig-18", text: "Continue (SIGCONT)", enabled: win.hasProcess },
+            { id: "signal", text: "Send Signal", enabled: win.hasProcess, items: win.signalList.map(g => (
+                { id: "signal-" + g.value, text: "SIG" + g.name + "  (" + g.value + ")" })) },
+            { separator: true },
+            { id: "nice-up", text: "Nice +1 (Lower Priority)", shortcut: "F8", enabled: table.currentPid > 0 },
+            { id: "nice-down", text: "Nice −1 (Higher Priority)", shortcut: "F7", enabled: table.currentPid > 0 } ] },
+        { title: "Help", items: [
+            { id: "keys", text: "treetop Keys", shortcut: "F1" } ] }
+    ]
+    readonly property var signalList: JSON.parse(mon.signal_list())
+
+    function menuAction(id) {
+        if (id.startsWith("interval-")) { settings.interval = Number(id.slice(9)); return }
+        if (id.startsWith("gpu-")) {
+            const g = win.allGpus[Number(id.slice(4))]
+            if (g) win.setGpuShown(g.pdev, !g.shown)
+            return
+        }
+        // Ids must be unique (the global menu updates items by id), so Send
+        // Signal's entries are signal-N and the common ones above sig-N.
+        if (id.startsWith("sig-")) { table.signalSelected(Number(id.slice(4))); return }
+        if (id.startsWith("signal-")) { table.signalSelected(Number(id.slice(7))); return }
+        switch (id) {
+        case "about": aboutDialog.open(); break
+        case "autostart": win.setAutostart(!win.autostart); break
+        case "own-tray": settings.ownTrayIcon = !settings.ownTrayIcon; break
+        case "root": settings.rootMode = !win.snap.root; mon.set_root_mode(!win.snap.root); break
+        case "hide": win.hide(); break
+        case "quit": Qt.quit(); break
+        case "find": filterField.forceActiveFocus(); break
+        case "clear-filter": filterField.text = ""; table.forceActiveFocus(); break
+        case "tag":
+            if (table.currentPid > 0) {
+                const tg = Object.assign({}, table.tagged)
+                if (tg[table.currentPid]) delete tg[table.currentPid]; else tg[table.currentPid] = true
+                table.tagged = tg
+            }
+            break
+        case "clear-tags": table.tagged = ({}); break
+        case "view-tree": win.setView("tree"); break
+        case "view-flat": win.setView("flat"); break
+        case "view-containers": win.setView("containers"); break
+        case "view-gpu": win.setView("gpu"); break
+        case "hold": win.held = !win.held; break
+        case "expand-all": mon.set_expanded_all(true); break
+        case "collapse-all": mon.set_expanded_all(false); break
+        // As the P / M / T keys do: always descending.
+        case "sort-cpu": table.sortKey = "pid"; table.sortBy("cpu"); break
+        case "sort-mem": table.sortKey = "cpu"; table.sortBy("mem"); break
+        case "sort-time": table.sortKey = "cpu"; table.sortBy("time"); break
+        case "resources": settings.showResources = !settings.showResources; break
+        case "cards": settings.showCards = !settings.showCards; break
+        case "meters": settings.showMeters = !settings.showMeters; break
+        case "combine": settings.cpuCombined = !settings.cpuCombined; break
+        case "tint": settings.tintColumns = !settings.tintColumns; break
+        case "kernel": settings.showKernel = !settings.showKernel; mon.set_show_kernel(settings.showKernel); table.refreshRows(); break
+        case "zoom-in": settings.fontDelta = Math.min(8, settings.fontDelta + 0.5); break
+        case "zoom-out": settings.fontDelta = Math.max(-4, settings.fontDelta - 0.5); break
+        case "zoom-reset": settings.fontDelta = 0; break
+        case "details": if (table.currentPid > 0) table.showDetails(table.currentPid); break
+        case "focus": table.toggleFocus(table.currentPid); break
+        case "nice-up": table.renice(1); break
+        case "nice-down": table.renice(-1); break
+        case "keys": helpDialog.open(); break
+        }
+    }
+
+    GlobalMenuBar {
+        id: globalMenu
+        window: win
+        model: win.menuModel
+        onTriggered: id => win.menuAction(id)
+    }
+    AppMenu {
+        id: appMenu
+        model: win.menuModel
+        onTriggered: id => win.menuAction(id)
+        itemDelegate: Component { KeyMenuItem { property string shortcutText; keys: shortcutText } }
+        onClosed: { tips.disarm(); menuButton.closedAt = Date.now() }
+    }
+
     // ---- layout ----------------------------------------------------------
     ColumnLayout {
         anchors.fill: parent
@@ -417,78 +565,19 @@ ApplicationWindow {
                 ToolButton {
                     id: menuButton
                     icon.name: "application-menu"
-                    ToolTip.text: "Options"
-                    ToolTip.visible: hovered && tips.armed && !optionsMenu.visible
+                    ToolTip.text: "Menu"
+                    ToolTip.visible: hovered && tips.armed && !appMenu.visible
                     // A second click closes it (the press that closed the
                     // menu mustn't open it again).
                     property real closedAt: 0
                     // Was the menu open when you pressed? Then this click
                     // only closes it (it may close before or after the click).
                     property bool wasOpen: false
-                    onPressed: wasOpen = optionsMenu.visible || Date.now() - closedAt < 400
+                    onPressed: wasOpen = appMenu.visible || Date.now() - closedAt < 400
                     onClicked: {
-                        if (wasOpen || optionsMenu.visible) optionsMenu.close()
-                        else optionsMenu.popup(this, 0, height)
+                        if (wasOpen || appMenu.visible) appMenu.close()
+                        else appMenu.openAt(this, 0, height)
                         wasOpen = false
-                    }
-                    Menu {
-                        id: optionsMenu
-                        onClosed: { tips.disarm(); menuButton.closedAt = Date.now() }
-                        KeyMenuItem { text: "Start at login (in the tray)"; icon.name: "system-run-symbolic"; checkable: true; checked: win.autostart; onTriggered: win.setAutostart(!win.autostart) }
-                        KeyMenuItem {
-                            text: "Separate tray icon (besides the tray widget)"
-                            icon.name: "preferences-desktop-notification-symbolic"
-                            visible: win.widgetInTray
-                            height: visible ? implicitHeight : 0
-                            checkable: true
-                            checked: settings.ownTrayIcon
-                            onTriggered: settings.ownTrayIcon = !settings.ownTrayIcon
-                        }
-                        KeyMenuItem {
-                            text: win.snap.rootStarting ? "Root access (waiting for polkit…)" : "Root access (polkit)"
-                            icon.name: win.snap.root ? "object-unlocked-symbolic" : "object-locked-symbolic"
-                            checkable: true
-                            checked: !!win.snap.root
-                            enabled: !win.snap.rootStarting
-                            onTriggered: { settings.rootMode = !win.snap.root; mon.set_root_mode(!win.snap.root) }
-                        }
-                        Menu {
-                            title: "GPUs"
-                            icon.name: "graphics-symbolic"
-                            Repeater {
-                                model: win.snap.gpus.length
-                                MenuItem {
-                                    readonly property var g: win.allGpus[index] || ({})
-                                    text: "GPU" + (index + 1) + " — " + (g.name || "") + (g.idle ? "  (idle)" : "")
-                                    checkable: true
-                                    checked: win.gpus.some(x => x.pdev === g.pdev)
-                                    onTriggered: win.setGpuShown(g.pdev, !win.gpus.some(x => x.pdev === g.pdev))
-                                }
-                            }
-                        }
-                        Menu {
-                            title: "Update every"
-                            icon.name: "chronometer-symbolic"
-                            Repeater {
-                                model: [{ t: "0.25 s", v: 250 }, { t: "0.5 s", v: 500 }, { t: "1 s", v: 1000 }, { t: "2 s", v: 2000 }, { t: "5 s", v: 5000 }]
-                                MenuItem {
-                                    text: modelData.t
-                                    checkable: true
-                                    checked: settings.interval === modelData.v
-                                    onTriggered: settings.interval = modelData.v
-                                }
-                            }
-                        }
-                        MenuSeparator {}
-                        KeyMenuItem { text: "Show resources"; keys: "r"; icon.name: "office-chart-line-symbolic"; checkable: true; checked: settings.showResources; onTriggered: settings.showResources = !settings.showResources }
-                        KeyMenuItem { text: "Graphs"; icon.name: "office-chart-area-symbolic"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
-                        KeyMenuItem { text: "Meters"; icon.name: "view-statistics-symbolic"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
-                        KeyMenuItem { text: "Combine CPU cores"; keys: "1"; icon.name: "merge-symbolic"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
-                        KeyMenuItem { text: "Tint resource columns"; icon.name: "color-fill-symbolic"; checkable: true; checked: settings.tintColumns; onTriggered: settings.tintColumns = !settings.tintColumns }
-                        KeyMenuItem { text: "Kernel threads"; keys: "K"; icon.name: "preferences-system-symbolic"; checkable: true; checked: settings.showKernel; onTriggered: { settings.showKernel = !settings.showKernel; mon.set_show_kernel(settings.showKernel); table.refreshRows() } }
-                        MenuSeparator {}
-                        KeyMenuItem { text: "Keys…"; keys: "h"; icon.name: "input-keyboard-symbolic"; onTriggered: helpDialog.open() }
-                        KeyMenuItem { text: "Quit"; keys: "Ctrl+Q"; icon.name: "application-exit-symbolic"; onTriggered: Qt.quit() }
                     }
                 }
                 ToolSeparator {}
@@ -1460,6 +1549,31 @@ ApplicationWindow {
         Label {
             font: win.mono
             text: mon.help_text()
+        }
+    }
+
+    Dialog {
+        id: aboutDialog
+        onClosed: tips.disarm()
+        title: "About treetop"
+        anchors.centerIn: parent
+        standardButtons: Dialog.Close
+        modal: true
+        ColumnLayout {
+            spacing: 8
+            Image {
+                Layout.alignment: Qt.AlignHCenter
+                source: "qrc:/qt/qml/com/benwbooth/treetop/qml/treetop.svg"
+                sourceSize: Qt.size(64, 64)
+            }
+            Label { Layout.alignment: Qt.AlignHCenter; text: "treetop " + Qt.application.version; font.bold: true; font.pointSize: win.font.pointSize * 1.3 }
+            Label { Layout.alignment: Qt.AlignHCenter; text: "A system monitor: processes, containers, GPUs and resources." }
+            Label {
+                Layout.alignment: Qt.AlignHCenter
+                text: "<a href='https://github.com/benwbooth/treetop'>github.com/benwbooth/treetop</a>"
+                onLinkActivated: link => Qt.openUrlExternally(link)
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+            }
         }
     }
 

@@ -1,4 +1,6 @@
 #include "treetop_app.h"
+#include "global_menu.h"
+#include <QtQml/qqml.h>
 
 #include <optional>
 #include <QtGui/QPalette>
@@ -412,6 +414,7 @@ int treetopRun(bool startHidden, bool toggle)
         }
     }
     QApplication::setApplicationName(QStringLiteral("treetop"));
+    QApplication::setApplicationVersion(QStringLiteral(TREETOP_VERSION));
     QApplication::setOrganizationName(QStringLiteral("treetop"));
     QApplication::setDesktopFileName(QStringLiteral("com.benwbooth.treetop"));
     QApplication::setQuitOnLastWindowClosed(false);
@@ -437,6 +440,7 @@ int treetopRun(bool startHidden, bool toggle)
     QLocalServer server;
     server.listen(serverName());
 
+    qmlRegisterType<GlobalMenuBar>("GlobalMenu", 1, 0, "GlobalMenuBar");
     QQmlApplicationEngine engine;
 #ifdef TREETOP_QT_QML
     // First in the engine's search order, whatever the environment says.

@@ -18,11 +18,15 @@ fn main() {
         "qml/KeyMenuItem.qml",
         "qml/TipGate.qml",
         "qml/WindowControls.qml",
+        "qml/AppMenu.qml",
     ]))
     .crate_include_root(Some("native".to_owned()))
     .qrc_resources(["qml/treetop.svg", "qml/Fmt.js"])
     .files(["src/monitor.rs", "src/main.rs"])
     .cpp_file("native/treetop_app.cpp")
+    // The menus in the desktop's global menu bar (QPA private headers).
+    .cpp_file("native/global_menu.h")
+    .cpp_file("native/global_menu.cpp")
     .qt_module("Gui")
     .qt_module("Network")
     .qt_module("DBus")
@@ -33,6 +37,8 @@ fn main() {
     // for our own code; Qt's ABI flags are untouched.
     let builder = unsafe {
         builder.cc_builder(|cc| {
+            // Shown in About treetop.
+            cc.define("TREETOP_VERSION", Some(format!("{:?}", env!("CARGO_PKG_VERSION")).as_str()));
             if !session_headers.is_empty() {
                 cc.includes(&session_headers);
                 cc.define("TREETOP_WAYLAND_SESSION_RESTORE", None);
