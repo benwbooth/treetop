@@ -47,10 +47,13 @@ fn launch_command() -> String {
 
 /// Whether the treetop widget is enabled in a Plasma system tray (then the
 /// app doesn't need a tray icon of its own). Only inside Plasma: the applets
-/// file stays around in other sessions (Hyprland), where no panel shows it.
+/// file stays around in other sessions (Hyprland, arbor), where no panel
+/// shows it. Plasma is the *primary* desktop, the first entry: arbor sets
+/// "arbor:KDE" (KDE only as a fallback for portals and themes), and taking
+/// that for Plasma left treetop with no tray icon at all.
 pub fn tray_widget_present() -> bool {
     let in_plasma = std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("KDE")))
+        .map(|d| d.split(':').next().is_some_and(|d| d.eq_ignore_ascii_case("KDE")))
         .unwrap_or(false);
     if !in_plasma {
         return false;

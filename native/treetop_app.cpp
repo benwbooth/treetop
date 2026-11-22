@@ -326,7 +326,24 @@ int treetopRun(bool startHidden, bool toggle)
     static int argc = 1;
     static char arg0[] = "treetop";
     static char *argv[] = {arg0, nullptr};
+    // Outside Plasma, Qt's generic theme, not KDE's: a session that lists
+    // KDE only as a fallback (arbor sets "arbor:KDE", for portals and
+    // themes) made Qt load the Plasma platform theme, whose tray icon never
+    // appears outside Plasma, so treetop had none. The primary desktop
+    // decides while Qt picks its theme; then it's put back for anything we
+    // start.
+    const QByteArray desktops = qgetenv("XDG_CURRENT_DESKTOP");
+    const QList<QByteArray> desktopList = desktops.split(':');
+    const bool kdeFallbackOnly = desktopList.size() > 1
+        && desktopList.first().compare("KDE", Qt::CaseInsensitive) != 0
+        && std::any_of(desktopList.begin(), desktopList.end(), [](const QByteArray &d) { return d.compare("KDE", Qt::CaseInsensitive) == 0; });
+    if (kdeFallbackOnly) {
+        qputenv("XDG_CURRENT_DESKTOP", desktopList.first());
+    }
     QApplication app(argc, argv);
+    if (kdeFallbackOnly) {
+        qputenv("XDG_CURRENT_DESKTOP", desktops);
+    }
     QApplication::setApplicationName(QStringLiteral("treetop"));
     QApplication::setOrganizationName(QStringLiteral("treetop"));
     QApplication::setDesktopFileName(QStringLiteral("com.benwbooth.treetop"));
