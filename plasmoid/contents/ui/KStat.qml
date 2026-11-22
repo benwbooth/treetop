@@ -87,7 +87,8 @@ RowLayout {
             text: stat.value
             font.pixelSize: Math.round(stat.h * 0.3)
             font.bold: true
-            font.family: "monospace"
+            font.family: Kirigami.Theme.defaultFont.family
+            font.features: { "tnum": 1 }
         }
         // Graph (or disk fill) plus the value in the lower-left corner.
         Canvas {
@@ -135,7 +136,7 @@ RowLayout {
                 if (!stat.inside) return
                 // Light digits with a dark halo: readable over the fill and
                 // over the empty background alike.
-                ctx.font = "bold " + Math.round(stat.h * 0.3) + "px monospace"
+                ctx.font = "bold " + Math.round(stat.h * 0.3) + "px '" + Kirigami.Theme.defaultFont.family + "'"
                 // Lower left: over the oldest history, leaving the current end
                 // of the curve (the right edge) in view.
                 ctx.textAlign = "left"
@@ -156,7 +157,8 @@ RowLayout {
         text: stat.value
         color: Kirigami.Theme.textColor
         font.pixelSize: Math.round(stat.h * 0.36)
-        font.family: "monospace"
+        font.family: Kirigami.Theme.defaultFont.family
+        font.features: { "tnum": 1 }
         renderType: Text.NativeRendering
         Layout.alignment: Qt.AlignVCenter
     }

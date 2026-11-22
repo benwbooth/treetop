@@ -228,8 +228,12 @@ PlasmoidItem {
         const extra = kind === "gpu" ? gpuUnattributedText() : ""
         if (!list.length) return extra || c(Kirigami.Theme.disabledTextColor, "Nothing is using it right now.")
         let t = "<table cellspacing='1'>"
+        // Memory and VRAM: each program's share of the total too.
+        const total = kind === "mem" ? topData.memTotal : kind === "vram" ? topData.vramTotal : 0
         for (const x of list)
-            t += "<tr><td align='right'>" + c(kindColor[kind], "<b>" + fmtTop(kind, x.v) + "</b>") + "</td><td>&nbsp;&nbsp;" + esc(x.name)
+            t += "<tr><td align='right'>" + c(kindColor[kind], "<b>" + fmtTop(kind, x.v) + "</b>") + "</td>"
+                + (total > 0 ? "<td align='right'>&nbsp;" + c(kindColor[kind], (x.v / total * 100).toFixed(x.v / total < 0.1 ? 1 : 0) + "%") + "</td>" : "")
+                + "<td>&nbsp;&nbsp;" + esc(x.name)
                 + "</td><td>&nbsp;" + c(Kirigami.Theme.disabledTextColor, x.n > 1 ? "×" + x.n : "") + "</td></tr>"
         t += "</table>"
         if (kind === "net" || kind === "disk")
@@ -427,6 +431,11 @@ PlasmoidItem {
                 history: root.hMem
                 showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
             }
+            // In a fixed slot: Repeater delegates made after load (the GPU
+            // list arrives late) could otherwise land after Disk.
+            RowLayout {
+                visible: root.gpuIndexes.length > 0
+                spacing: Math.round(compact.h * 0.16)
             Repeater {
                 model: root.gpuIndexes
                 RowLayout {
@@ -455,6 +464,7 @@ PlasmoidItem {
                         showGraph: root.cfg.showGraphs; colorLabel: root.cfg.colorLabels; graphWidthFactor: strip.gw; overlay: root.cfg.valuesInside; verticalLabel: root.vlabels; stackedLabel: root.slabels
                     }
                 }
+            }
             }
             KStat {
                 visible: root.cfg.showDisk
@@ -503,8 +513,8 @@ PlasmoidItem {
                 }
                 Column {
                     spacing: -2
-                    Text { text: "↑" + root.fmtRate(netUp.value); color: Kirigami.Theme.textColor; font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); renderType: Text.NativeRendering }
-                    Text { text: "↓" + root.fmtRate(netDown.value); color: Kirigami.Theme.textColor; font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); renderType: Text.NativeRendering }
+                    Text { text: "↑" + root.fmtRate(netUp.value); color: Kirigami.Theme.textColor; font.family: Kirigami.Theme.defaultFont.family; font.features: { "tnum": 1 }; font.pixelSize: Math.round(compact.h * 0.3); renderType: Text.NativeRendering }
+                    Text { text: "↓" + root.fmtRate(netDown.value); color: Kirigami.Theme.textColor; font.family: Kirigami.Theme.defaultFont.family; font.features: { "tnum": 1 }; font.pixelSize: Math.round(compact.h * 0.3); renderType: Text.NativeRendering }
                 }
             }
             // Temperatures: CPU over GPU, each coloured by heat.
@@ -543,14 +553,14 @@ PlasmoidItem {
                         visible: root.cpuTempC > 0
                         text: "CPU " + root.cpuTempC.toFixed(0) + "°"
                         color: root.tempColor(root.cpuTempC)
-                        font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); font.bold: true
+                        font.family: Kirigami.Theme.defaultFont.family; font.features: { "tnum": 1 }; font.pixelSize: Math.round(compact.h * 0.3); font.bold: true
                         renderType: Text.NativeRendering
                     }
                     Text {
                         visible: root.gpuTempC > 0
                         text: "GPU " + root.gpuTempC.toFixed(0) + "°"
                         color: root.tempColor(root.gpuTempC)
-                        font.family: "monospace"; font.pixelSize: Math.round(compact.h * 0.3); font.bold: true
+                        font.family: Kirigami.Theme.defaultFont.family; font.features: { "tnum": 1 }; font.pixelSize: Math.round(compact.h * 0.3); font.bold: true
                         renderType: Text.NativeRendering
                     }
                 }

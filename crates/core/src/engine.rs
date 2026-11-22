@@ -230,6 +230,10 @@ impl Engine {
                         out["procs"] = s.procs.summary();
                         out["top"] = s.procs.top();
                         out["top"]["gpuUnattributed"] = json!(unattributed);
+                        // Totals, for each program's share in the widget.
+                        out["top"]["memTotal"] = out["mem"]["total"].clone();
+                        let vram_total: f64 = out["gpus"].as_array().map(|a| a.iter().filter_map(|g| g["vramTotal"].as_f64()).sum()).unwrap_or(0.0);
+                        out["top"]["vramTotal"] = json!(vram_total);
                         let mut notices = actions.drain();
                         if let Some(f) = s.procs.focus {
                             if !s.procs.procs.contains_key(&f) {
