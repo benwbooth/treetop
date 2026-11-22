@@ -18,6 +18,10 @@ Menu {
     // app's own look, e.g. with icons); the default shows the shortcut at
     // the right.
     property Component itemDelegate: defaultItem
+    // Flat: every menu's items inline, a separator between menus (submenus
+    // kept), as nixos-update-checker's hamburger does. For apps with short
+    // menus; otherwise one submenu per menu.
+    property bool flat: false
 
     function openBelow(item) {
         rebuild()
@@ -35,6 +39,15 @@ Menu {
         _objects = []
         var menus = model || []
         for (var m = 0; m < menus.length; m++) {
+            if (flat) {
+                if (m > 0) {
+                    var sep = separatorComponent.createObject(null)
+                    _objects.push(sep)
+                    addItem(sep)
+                }
+                fill(root, menus[m].items || [])
+                continue
+            }
             var sub = submenuComponent.createObject(null, { title: menus[m].title })
             _objects.push(sub)
             fill(sub, menus[m].items || [])
