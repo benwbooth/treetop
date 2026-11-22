@@ -19,6 +19,7 @@
 #include <QtDBus/QDBusConnectionInterface>
 #include <QtDBus/QDBusMessage>
 #include <QtDBus/QDBusVirtualObject>
+#include <QtGui/QFont>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QIcon>
 #include <QtNetwork/QLocalServer>
@@ -370,6 +371,26 @@ static std::optional<QPalette> kdeSchemePalette()
     return pal;
 }
 
+// A KDE font setting (kdeglobals [General] font/fixed), or KDE's default
+// when it isn't set, for when Qt runs without the Plasma platform theme
+// (whose fonts these are; Qt's generic theme says "Sans Serif" 9pt).
+static QFont kdeFont(const char *key, const char *fallback)
+{
+    QFont font;
+    const QString file = QStandardPaths::locate(QStandardPaths::GenericConfigLocation, QStringLiteral("kdeglobals"));
+    if (!file.isEmpty()) {
+        QSettings kg(file, QSettings::IniFormat);
+        const QVariant v = kg.value(QStringLiteral("General/%1").arg(QLatin1String(key)));
+        // QSettings splits "Noto Sans,10,-1,..." at the commas.
+        const QString s = v.typeId() == QMetaType::QStringList ? v.toStringList().join(QLatin1Char(',')) : v.toString();
+        if (!s.isEmpty() && font.fromString(s)) {
+            return font;
+        }
+    }
+    font.fromString(QLatin1String(fallback));
+    return font;
+}
+
 int treetopRun(bool startHidden, bool toggle)
 {
     preferOwnQt();
@@ -412,6 +433,7 @@ int treetopRun(bool startHidden, bool toggle)
         if (const auto pal = kdeSchemePalette()) {
             QGuiApplication::setPalette(*pal);
         }
+        QGuiApplication::setFont(kdeFont("font", "Noto Sans,10"));
     }
     QApplication::setApplicationName(QStringLiteral("treetop"));
     QApplication::setApplicationVersion(QStringLiteral(TREETOP_VERSION));
@@ -448,7 +470,7 @@ int treetopRun(bool startHidden, bool toggle)
 #endif
     // KDE's configured fixed-width font (System Settings > Fonts > Fixed width).
     engine.rootContext()->setContextProperty(QStringLiteral("systemFixedFont"),
-        QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        kdeFallbackOnly ? kdeFont("fixed", "Hack,10") : QFontDatabase::systemFont(QFontDatabase::FixedFont));
     engine.setInitialProperties({{QStringLiteral("startHidden"), startHidden}});
     // The single instance: settings in a private copy until we exit.
     {
