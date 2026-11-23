@@ -409,6 +409,20 @@ static QFont kdeFont(const char *key, const char *fallback)
     return font;
 }
 
+// KDE's icon theme (kdeglobals [Icons] Theme), or Breeze to match the
+// palette's lightness when it isn't set.
+static QString kdeIconTheme()
+{
+    const QString file = QStandardPaths::locate(QStandardPaths::GenericConfigLocation, QStringLiteral("kdeglobals"));
+    if (!file.isEmpty()) {
+        const QString theme = QSettings(file, QSettings::IniFormat).value(QStringLiteral("Icons/Theme")).toString();
+        if (!theme.isEmpty()) {
+            return theme;
+        }
+    }
+    return QGuiApplication::palette().color(QPalette::Window).lightness() < 128 ? QStringLiteral("breeze-dark") : QStringLiteral("breeze");
+}
+
 int treetopRun(bool startHidden, bool toggle)
 {
     preferOwnQt();
@@ -452,6 +466,9 @@ int treetopRun(bool startHidden, bool toggle)
             QGuiApplication::setPalette(*pal);
         }
         QGuiApplication::setFont(kdeFont("font", "Noto Sans,10"));
+        // The icon theme too (the portal theme doesn't say), or the menus'
+        // monochrome icons come from light Breeze, dark on a dark menu.
+        QIcon::setThemeName(kdeIconTheme());
     }
     QApplication::setApplicationName(QStringLiteral("treetop"));
     QApplication::setApplicationVersion(QStringLiteral(TREETOP_VERSION));
