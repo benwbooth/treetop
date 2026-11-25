@@ -3,6 +3,7 @@ use cxx_qt_build::{CxxQtBuilder, QmlModule};
 fn main() {
     println!("cargo:rerun-if-changed=qml");
     println!("cargo:rerun-if-changed=native");
+    println!("cargo:rerun-if-env-changed=TREETOP_FONT_DIR");
     let (private_headers, session_restore) = qt_private_headers();
     let qt_dirs = qt_runtime_dirs();
     let builder = CxxQtBuilder::new_qml_module(QmlModule::new("com.benwbooth.treetop").qml_files([
@@ -15,7 +16,6 @@ fn main() {
         "qml/SectionHeader.qml",
         "qml/HiddenChip.qml",
         "qml/KineticScroll.qml",
-        "qml/KeyMenuItem.qml",
         "qml/TipGate.qml",
         "qml/WindowControls.qml",
         "qml/AppMenu.qml",
@@ -48,6 +48,11 @@ fn main() {
             // The plugin and QML directories of the Qt we build against,
             // put first at startup so a desktop session's own (other
             // version) Qt modules can't shadow them.
+            // Fonts shipped with the app (Hack, from the flake), registered
+            // at startup.
+            if let Ok(fonts) = std::env::var("TREETOP_FONT_DIR") {
+                cc.define("TREETOP_FONT_DIR", Some(format!("{fonts:?}").as_str()));
+            }
             if let Some((plugins, qml)) = &qt_dirs {
                 cc.define("TREETOP_QT_PLUGINS", Some(format!("{plugins:?}").as_str()));
                 cc.define("TREETOP_QT_QML", Some(format!("{qml:?}").as_str()));

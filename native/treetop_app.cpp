@@ -5,6 +5,7 @@
 #include <optional>
 #include <QtGui/QPalette>
 #include <QtCore/QDir>
+#include <QtCore/QDirIterator>
 #include <QtCore/QFile>
 #include <QtCore/QLockFile>
 #include <QtCore/QThread>
@@ -470,6 +471,15 @@ int treetopRun(bool startHidden, bool toggle)
         // monochrome icons come from light Breeze, dark on a dark menu.
         QIcon::setThemeName(kdeIconTheme());
     }
+#ifdef TREETOP_FONT_DIR
+    // Our own Hack (KDE's fixed-width font), for systems without it.
+    if (!QFontDatabase::families().contains(QStringLiteral("Hack"))) {
+        QDirIterator it(QStringLiteral(TREETOP_FONT_DIR), {QStringLiteral("*.ttf"), QStringLiteral("*.otf")}, QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            QFontDatabase::addApplicationFont(it.next());
+        }
+    }
+#endif
     QApplication::setApplicationName(QStringLiteral("treetop"));
     QApplication::setApplicationVersion(QStringLiteral(TREETOP_VERSION));
     QApplication::setOrganizationName(QStringLiteral("treetop"));

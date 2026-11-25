@@ -11,8 +11,15 @@
       let
         pkgs = import nixpkgs { inherit system; };
         qtModules = (with pkgs.qt6; [ qtbase qtdeclarative qtsvg qtwayland ])
-          ++ (with pkgs.kdePackages; [ qqc2-desktop-style plasma-integration kirigami ]);
+          # What the org.kde.desktop style imports (Kirigami, Sonnet), our
+          # own copy: they came from the desktop's Plasma until there was
+          # none. kirigami is a wrapper with no files (it only propagates),
+          # which qt6.env doesn't follow, so the real one.
+          ++ (with pkgs.kdePackages; [ qqc2-desktop-style plasma-integration kirigami.unwrapped sonnet ]);
         qtEnv = pkgs.qt6.env "treetop-qt-env" qtModules;
+        # Hack, KDE's fixed-width font (the process table's), our own copy:
+        # it came with the desktop's Plasma until there was none.
+        fontDir = "${pkgs.hack-font}/share/fonts";
         # pkexec (polkit) and kill are needed to signal processes owned by
         # other users; the app asks polkit and the desktop agent prompts.
         runtimePath = pkgs.lib.makeBinPath [ pkgs.coreutils pkgs.util-linux ];
@@ -31,6 +38,7 @@
           buildInputs = qtModules;
           preBuild = ''
             export QMAKE="${qtEnv}/bin/qmake"
+            export TREETOP_FONT_DIR="${fontDir}"
           '';
           postInstall = ''
             mkdir -p $out/share/plasma/plasmoids $out/share/applications $out/share/icons/hicolor/scalable/apps
@@ -73,6 +81,7 @@
         devShells.default = pkgs.mkShell {
           packages = (with pkgs; [ cargo rustc clippy rustfmt rust-analyzer pkg-config clang ]) ++ qtModules;
           QMAKE = "${qtEnv}/bin/qmake";
+          TREETOP_FONT_DIR = fontDir;
           shellHook = ''
             export PATH="${qtEnv}/bin:${qtEnv}/libexec:$PATH"
             # qtbase's setup hook points QMAKE at bare qtbase; cxx-qt needs the
