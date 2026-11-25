@@ -715,17 +715,17 @@ ApplicationWindow {
                 }
                 Text { text: "r"; font: win.mono; color: win.dimColor }
             }
-            Menu {
+            MacMenu {
                 id: resMenu
                 onClosed: tips.disarm()
-                MenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
-                MenuItem { text: "Meters"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
-                MenuItem { text: "Combine CPU cores (1)"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
-                MenuSeparator {}
+                MacMenuItem { text: "Graphs"; checkable: true; checked: settings.showCards; onTriggered: settings.showCards = !settings.showCards }
+                MacMenuItem { text: "Meters"; checkable: true; checked: settings.showMeters; onTriggered: settings.showMeters = !settings.showMeters }
+                MacMenuItem { text: "Combine CPU cores (1)"; checkable: true; checked: settings.cpuCombined; onTriggered: settings.cpuCombined = !settings.cpuCombined }
+                MacMenuSeparator {}
                 Repeater {
                     // Count-based so the open menu isn't rebuilt by each update.
                     model: win.snap.gpus.length
-                    MenuItem {
+                    MacMenuItem {
                         readonly property var g: win.snap.gpus[index] || ({})
                         text: "Show GPU" + (index + 1) + " — " + (g.name || "")
                         checkable: true
@@ -737,13 +737,13 @@ ApplicationWindow {
         }
 
         // Which GPUs to show (from the GPU section's "+N hidden" link).
-        Menu {
+        MacMenu {
             id: gpuChooser
             onClosed: tips.disarm()
-            MenuItem { text: "GPUs to show"; enabled: false }
+            MacMenuItem { text: "GPUs to show"; enabled: false }
             Repeater {
                 model: win.snap.gpus.length
-                MenuItem {
+                MacMenuItem {
                     readonly property var g: win.allGpus[index] || ({})
                     text: "GPU" + (index + 1) + " — " + (g.name || "") + (g.idle ? "  (idle)" : "")
                     checkable: true
@@ -755,14 +755,14 @@ ApplicationWindow {
 
         // One context menu for every GPU card/meter, outside the Repeaters,
         // so updates can't destroy it while it's open.
-        Menu {
+        MacMenu {
             id: gpuMenu
             onClosed: tips.disarm()
             property string pdev: ""
             property int number: 0
             function openFor(g) { pdev = g.pdev; number = g.number; popup() }
-            MenuItem { text: "Hide GPU " + gpuMenu.number; onTriggered: win.hideGpu(gpuMenu.pdev) }
-            MenuItem { text: "GPU view (g)"; onTriggered: win.setView("gpu") }
+            MacMenuItem { text: "Hide GPU " + gpuMenu.number; onTriggered: win.hideGpu(gpuMenu.pdev) }
+            MacMenuItem { text: "GPU view (g)"; onTriggered: win.setView("gpu") }
         }
 
         // kstats half: graph cards

@@ -43,10 +43,10 @@ Rectangle {
         acceptedButtons: Qt.RightButton
         onClicked: (m) => ctx.popup()
     }
-    Menu {
+    MacMenu {
         onClosed: tipGate.disarm()
         id: ctx
-        MenuItem { text: "Hide GPU " + panel.number; onTriggered: panel.hideRequested() }
+        MacMenuItem { text: "Hide GPU " + panel.number; onTriggered: panel.hideRequested() }
     }
 
     // Menus are drawn inside this window, so a click in another window

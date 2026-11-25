@@ -19,6 +19,15 @@ fn main() {
         "qml/TipGate.qml",
         "qml/WindowControls.qml",
         "qml/AppMenu.qml",
+        "qml/MacComboBox.qml",
+        "qml/MacComboItem.qml",
+        "qml/MacComboPopup.qml",
+        "qml/MacMenuBackground.qml",
+        "qml/MacMenuIcon.qml",
+        "qml/MacMenuItem.qml",
+        "qml/MacMenu.qml",
+        "qml/MacMenuSeparator.qml",
+        "qml/MacMenuStyle.qml",
     ]))
     .crate_include_root(Some("native".to_owned()))
     .qrc_resources(["qml/treetop.svg", "qml/Fmt.js"])
