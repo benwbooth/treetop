@@ -28,6 +28,9 @@ fn main() {
         "qml/MacMenu.qml",
         "qml/MacMenuSeparator.qml",
         "qml/MacMenuStyle.qml",
+        "qml/ChromeButtons.qml",
+        "qml/ChromeResizeEdges.qml",
+        "qml/ChromeTitleArea.qml",
     ]))
     .crate_include_root(Some("native".to_owned()))
     .qrc_resources(["qml/treetop.svg", "qml/Fmt.js"])
