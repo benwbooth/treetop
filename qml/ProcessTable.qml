@@ -376,7 +376,7 @@ FocusScope {
     }
 
     function openMenu(x, y) {
-        menu.popup(x, y)
+        menu.openAt(table, x, y)
     }
 
     ColumnLayout {
@@ -411,7 +411,7 @@ FocusScope {
             MouseArea {
                 anchors.fill: parent
                 acceptedButtons: Qt.RightButton
-                onClicked: (mouse) => { const p = mapToItem(table, mouse.x, mouse.y); columnMenu.popup(p.x, p.y) }
+                onClicked: (mouse) => { const p = mapToItem(table, mouse.x, mouse.y); columnMenu.openAt(table, p.x, p.y) }
             }
             clip: true
             // Always-visible way to the column chooser (also: right-click).
@@ -431,7 +431,7 @@ FocusScope {
                     color: "#0d1a12"
                 }
                 HoverHandler { id: colHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: { const p = parent.mapToItem(table, 0, parent.height); columnMenu.popup(p.x, p.y) } }
+                TapHandler { onTapped: { const p = parent.mapToItem(table, 0, parent.height); columnMenu.openAt(table, p.x, p.y) } }
                 ToolTip.visible: colHover.hovered && !table.tipsBlocked
                 ToolTip.delay: 500
                 ToolTip.text: "Choose which columns to show (you can also right-click any column header)."
@@ -538,7 +538,7 @@ FocusScope {
                                 if (dragged) return
                                 if (mouse.button === Qt.RightButton) {
                                     const p = mapToItem(table, mouse.x, mouse.y)
-                                    columnMenu.popup(p.x, p.y)
+                                    columnMenu.openAt(table, p.x, p.y)
                                 } else {
                                     table.sortBy(modelData.key === "command" ? "pid" : (modelData.key === "engines" ? "gpu" : modelData.key))
                                 }
@@ -1022,68 +1022,76 @@ FocusScope {
         }
     }
 
-    Menu {
+    // The right-click menus, in the ☰ menu's look (AppMenu, flat: each
+    // group between separators, keys at the right, an icon on every row).
+    AppMenu {
         id: columnMenu
+        flat: true
+        popupType: Popup.Item
         onClosed: tipGate.disarm()
-        MenuItem { text: "Columns"; enabled: false }
-        Repeater {
-            model: table.columns.filter(c => c.key !== "command")
-            MenuItem {
-                text: modelData.title
-                checkable: true
-                checked: table.hiddenColumns.indexOf(modelData.key) < 0
-                onTriggered: table.toggleColumn(modelData.key)
-            }
+        model: [
+            { title: "Columns", items: [{ id: "", text: "Columns", icon: "view-visible", enabled: false }].concat(
+                table.columns.filter(c => c.key !== "command").map(c => ({
+                    id: "col:" + c.key, text: c.title, icon: "view-visible",
+                    checkable: true, checked: table.hiddenColumns.indexOf(c.key) < 0 }))) },
+            { title: "Paths", items: [
+                { text: "/nix/store paths", icon: "folder-tar", items: [
+                    { id: "store:full", text: "Full", icon: "format-justify-fill", checkable: true,
+                      checked: !table.shortenStorePaths || table.storeStyle === "full" },
+                    { id: "store:hash", text: "Short hash  (/nix/store/abcde…-)", icon: "format-justify-fill", checkable: true,
+                      checked: table.shortenStorePaths && table.storeStyle === "hash" },
+                    { id: "store:compact", text: "Compact  (/n…/s…/abcde…-)", icon: "format-justify-fill", checkable: true,
+                      checked: table.shortenStorePaths && table.storeStyle === "compact" } ] },
+                { id: "cols:all", text: "Show all columns", icon: "view-visible" } ] }
+        ]
+        onTriggered: id => {
+            if (id.startsWith("col:")) table.toggleColumn(id.slice(4))
+            else if (id.startsWith("store:")) { table.shortenStorePaths = true; table.storeStyle = id.slice(6) }
+            else if (id === "cols:all") table.hiddenColumns = []
         }
-        MenuSeparator {}
-        Menu {
-            title: "/nix/store paths"
-            MenuItem { text: "Full"; checkable: true; checked: !table.shortenStorePaths || table.storeStyle === "full"; onTriggered: { table.shortenStorePaths = true; table.storeStyle = "full" } }
-            MenuItem { text: "Short hash  (/nix/store/abcde…-)"; checkable: true; checked: table.shortenStorePaths && table.storeStyle === "hash"; onTriggered: { table.shortenStorePaths = true; table.storeStyle = "hash" } }
-            MenuItem { text: "Compact  (/n…/s…/abcde…-)"; checkable: true; checked: table.shortenStorePaths && table.storeStyle === "compact"; onTriggered: { table.shortenStorePaths = true; table.storeStyle = "compact" } }
-        }
-        MenuItem { text: "Show all columns"; onTriggered: table.hiddenColumns = [] }
     }
 
-    Menu {
+    AppMenu {
         id: menu
+        flat: true
+        popupType: Popup.Item
         onClosed: tipGate.disarm()
         readonly property var sigs: JSON.parse(table.monitor.signal_list())
-        MenuItem {
-            enabled: false
-            text: {
-                const p = table.selectedPids()
-                return p.length > 1 ? p.length + " tagged processes" : (p.length === 1 ? "PID " + p[0] : "No process")
-            }
+        readonly property var pids: table.selectedPids()
+        readonly property bool focused: table.focusPid > 0 && table.focusPid === table.currentPid
+        model: [
+            { title: "Process", items: [
+                { text: pids.length > 1 ? pids.length + " tagged processes" : (pids.length === 1 ? "PID " + pids[0] : "No process"),
+                  icon: "documentinfo", enabled: false },
+                { id: "focus", text: focused ? "Show all processes" : "Focus on this process tree", icon: "zoom-select",
+                  shortcut: "F", enabled: table.currentPid > 0 },
+                { id: "details", text: "Details…", icon: "documentinfo", shortcut: "Enter", enabled: table.currentPid > 0 } ] },
+            { title: "Signals", items: [
+                { id: "sig:15", text: "Terminate (SIGTERM)", icon: "process-stop" },
+                { id: "sig:9", text: "Kill (SIGKILL)", icon: "edit-delete" },
+                { id: "sig:19", text: "Stop (SIGSTOP)", icon: "media-playback-pause" },
+                { id: "sig:18", text: "Continue (SIGCONT)", icon: "media-playback-start" },
+                { text: "Send signal", icon: "mail-send", items: sigs.map(g => ({
+                    id: "sig:" + g.value, text: "SIG" + g.name + "  (" + g.value + ")", icon: "mail-send" })) } ] },
+            { title: "Priority", items: [
+                { id: "nice:1", text: "Nice +1 (lower priority)", icon: "go-down" },
+                { id: "nice:-1", text: "Nice −1 (higher priority)", icon: "go-up" } ] },
+            { title: "Tree", items: [
+                { id: "fold", text: "Collapse / expand", icon: "view-list-tree" },
+                { id: "expand", text: "Expand all", icon: "expand-all" },
+                { id: "collapse", text: "Collapse all", icon: "collapse-all" },
+                { id: "untag", text: "Clear tags", icon: "edit-clear-all", enabled: Object.keys(table.tagged).length > 0 } ] }
+        ]
+        onTriggered: id => {
+            if (id.startsWith("sig:")) table.signalSelected(Number(id.slice(4)))
+            else if (id.startsWith("nice:")) table.renice(Number(id.slice(5)))
+            else if (id === "focus") table.toggleFocus(table.currentPid)
+            else if (id === "details") table.showDetails(table.currentPid)
+            else if (id === "fold") table.toggleCurrent()
+            else if (id === "expand") table.monitor.set_expanded_all(true)
+            else if (id === "collapse") table.monitor.set_expanded_all(false)
+            else if (id === "untag") table.tagged = ({})
         }
-        MenuSeparator {}
-        MenuItem {
-            text: table.focusPid > 0 && table.focusPid === table.currentPid ? "Show all processes (f)" : "Focus on this process tree (f)"
-            icon.name: "zoom-select"
-            enabled: table.currentPid > 0
-            onTriggered: table.toggleFocus(table.currentPid)
-        }
-        MenuSeparator {}
-        MenuItem { text: "Terminate (SIGTERM)"; icon.name: "process-stop"; onTriggered: table.signalSelected(15) }
-        MenuItem { text: "Kill (SIGKILL)"; icon.name: "edit-delete"; onTriggered: table.signalSelected(9) }
-        MenuItem { text: "Stop (SIGSTOP)"; icon.name: "media-playback-pause"; onTriggered: table.signalSelected(19) }
-        MenuItem { text: "Continue (SIGCONT)"; icon.name: "media-playback-start"; onTriggered: table.signalSelected(18) }
-        Menu {
-            title: "Send signal"
-            Repeater {
-                model: menu.sigs
-                MenuItem { text: "SIG" + modelData.name + "  (" + modelData.value + ")"; onTriggered: table.signalSelected(modelData.value) }
-            }
-        }
-        MenuSeparator {}
-        MenuItem { text: "Nice +1 (lower priority)"; onTriggered: table.renice(1) }
-        MenuItem { text: "Nice −1 (higher priority)"; onTriggered: table.renice(-1) }
-        MenuSeparator {}
-        MenuItem { text: "Details… (Enter)"; icon.name: "documentinfo"; enabled: table.currentPid > 0; onTriggered: table.showDetails(table.currentPid) }
-        MenuItem { text: "Collapse / expand"; onTriggered: table.toggleCurrent() }
-        MenuItem { text: "Expand all"; onTriggered: table.monitor.set_expanded_all(true) }
-        MenuItem { text: "Collapse all"; onTriggered: table.monitor.set_expanded_all(false) }
-        MenuItem { text: "Clear tags"; enabled: Object.keys(table.tagged).length > 0; onTriggered: table.tagged = ({}) }
     }
 
     // Menus are drawn inside this window, so a click in another window

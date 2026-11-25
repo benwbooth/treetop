@@ -608,27 +608,22 @@ ApplicationWindow {
                     onPressed: wasOpen = viewMenu.visible || Date.now() - closedAt < 400
                     onClicked: {
                         if (wasOpen || viewMenu.visible) viewMenu.close()
-                        else viewMenu.popup(this, 0, height)
+                        else viewMenu.openAt(this, 0, height + 4)
                         wasOpen = false
                     }
                     ToolTip.text: "View: the process tree, a flat list, grouped by container, or the GPU view"
                     ToolTip.visible: hovered && !viewMenu.visible && tips.armed
                     ToolTip.delay: 600
-                    Menu {
+                    // In the ☰ menu's look.
+                    AppMenu {
                         id: viewMenu
+                        flat: true
+                        popupType: Popup.Item
                         onClosed: { tips.disarm(); viewButton.closedAt = Date.now() }
-                        Repeater {
-                            model: viewButton.views
-                            KeyMenuItem {
-                                required property var modelData
-                                text: modelData.t
-                                icon.name: modelData.i
-                                keys: modelData.k
-                                checkable: true
-                                checked: win.view === modelData.v
-                                onTriggered: win.setView(modelData.v)
-                            }
-                        }
+                        model: [{ title: "View", items: viewButton.views.map(x => ({
+                            id: x.v, text: x.t, icon: x.i, shortcut: x.k,
+                            checkable: true, checked: win.view === x.v })) }]
+                        onTriggered: id => win.setView(id)
                     }
                 }
                 ToolSeparator { visible: win.view === "tree" || win.view === "containers" }
