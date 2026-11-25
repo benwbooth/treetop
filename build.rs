@@ -26,6 +26,7 @@ fn main() {
         "qml/MacMenuIcon.qml",
         "qml/MacMenuItem.qml",
         "qml/MacMenu.qml",
+        "qml/MacMenuButton.qml",
         "qml/MacMenuSeparator.qml",
         "qml/MacMenuStyle.qml",
         "qml/ChromeButtons.qml",

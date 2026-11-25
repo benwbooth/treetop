@@ -543,7 +543,7 @@ ApplicationWindow {
         model: win.menuModel
         onTriggered: id => win.menuAction(id)
         popupType: Popup.Item
-        onClosed: { tips.disarm(); menuButton.closedAt = Date.now() }
+        onClosed: tips.disarm()
     }
 
     // ---- layout ----------------------------------------------------------
@@ -566,23 +566,11 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: win.macOS ? 72 : 0
                 spacing: 6
-                ToolButton {
+                MacMenuButton {
                     id: menuButton
-                    icon.name: "application-menu"
-                    ToolTip.text: "Menu"
-                    ToolTip.visible: hovered && tips.armed && !appMenu.visible
-                    // A second click closes it (the press that closed the
-                    // menu mustn't open it again).
-                    property real closedAt: 0
-                    // Was the menu open when you pressed? Then this click
-                    // only closes it (it may close before or after the click).
-                    property bool wasOpen: false
-                    onPressed: wasOpen = appMenu.visible || Date.now() - closedAt < 400
-                    onClicked: {
-                        if (wasOpen || appMenu.visible) appMenu.close()
-                        else appMenu.openAt(this, 0, height)
-                        wasOpen = false
-                    }
+                    dark: win.dark
+                    fg: pal.windowText
+                    menu: appMenu
                 }
                 ToolSeparator {}
                 // The view, as one drop-down (t, c and g switch too).
